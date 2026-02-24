@@ -14,10 +14,6 @@ label neon_view:
         label: "Go back to the terminal." -> hacking_terminal
         label: "Head to the club." -> underground_club
 
-// MISSING LABELS: hacking_terminal, underground_club
-// These will trigger the AI generation prompt in the client.
-
-
 label hacking_terminal:
     background server_room
     scene anya_typing
@@ -28,23 +24,24 @@ label hacking_terminal:
     talk anya "The encryption is heavier than I expected. I can brute force it, but they'll trace the signal instantly."
     talk anya "Or I can take the slow route and bypass the ICE manually. Safer, but boring."
     choice:
-        "Brute Force It":
-            talk anya "Screw it. Sometimes you just need to kick the door down."
-            set security_level 0
-            talk anya "Firewall breached. But I definitely tripped an alarm. We should move."
-            -> start
-        "Bypass Silently":
-            talk anya "Patience is a virtue, right? Initiating silent bypass."
-            set security_level 100
-            talk anya "Done. I'm in, and nobody's the wiser."
-            -> start
-        "It's not worth the risk":
-            talk anya "This headache isn't worth the data. I'm out."
-            -> start
+        label: "Brute Force It" -> brute_force_path
+        label: "Bypass Silently" -> silent_path
+        label: "It's not worth the risk" -> start
+
+label brute_force_path:
+    talk anya "Screw it. Sometimes you just need to kick the door down."
+    set security_level 0
+    talk anya "Firewall breached. But I definitely tripped an alarm. We should move."
+    -> start
+
+label silent_path:
+    talk anya "Patience is a virtue, right? Initiating silent bypass."
+    set security_level 100
+    talk anya "Done. I'm in, and nobody's the wiser."
+    -> start
 
 label underground_club:
     background neon_club
-    play bass_heavy
     talk anya "The air filters here haven't been serviced since the last corporate war. I can taste the recycled sweat."
     talk anya "I'm not here for the atmosphere. I need to find the data broker before this headache gets any worse."
     choice:
