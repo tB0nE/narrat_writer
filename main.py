@@ -134,7 +134,7 @@ class NarratParser:
 # --- SESSION MANAGEMENT ---
 
 def load_session(session_id: str) -> SessionState:
-    path = f"{session_id}.json"
+    path = f"saves/{session_id}.json"
     if os.path.exists(path):
         with open(path, "r") as f:
             data = json.load(f)
@@ -142,7 +142,8 @@ def load_session(session_id: str) -> SessionState:
     return SessionState(session_id=session_id)
 
 def save_session(state: SessionState):
-    with open(f"{state.session_id}.json", "w") as f:
+    os.makedirs("saves", exist_ok=True)
+    with open(f"saves/{state.session_id}.json", "w") as f:
         f.write(state.json())
 
 def get_reference(category: str, name: str, sub_type: str = None) -> str:
