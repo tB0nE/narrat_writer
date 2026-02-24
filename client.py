@@ -13,8 +13,9 @@ BASE_URL = "http://localhost:8045"
 def make_layout() -> Layout:
     layout = Layout()
     layout.split_column(
-        Layout(name="upper", ratio=1),
-        Layout(name="lower", ratio=1)
+        Layout(name="upper", ratio=35),    # 35%
+        Layout(name="dialogue", ratio=35), # 35%
+        Layout(name="lower", ratio=30)     # 30%
     )
     layout["upper"].split_row(
         Layout(name="descriptions", ratio=1),
@@ -23,7 +24,6 @@ def make_layout() -> Layout:
     return layout
 
 def get_descriptions_panel(data):
-    # Check for Animation or Scene first
     anim = data.get("active_animation")
     scene = data.get("active_scene")
     
@@ -35,21 +35,16 @@ def get_descriptions_panel(data):
         content = f"[bold green]SCENE: {scene['name']}[/bold green]\n\n{scene['content']}"
         return Panel(content, title="[bold]Active Scene[/bold]", border_style="green")
 
-    # Fallback to BG/Character table
     table = Table(show_header=False, box=None, padding=(0, 1))
-    
-    # Background
     bg_name = data.get("background", "None")
     bg_desc = data.get("background_desc", "No background set.")
     table.add_row("[bold cyan]BG:[/bold cyan]", f"[italic]{bg_name}[/italic]")
     table.add_row("", f"[dim]{bg_desc}[/dim]")
     
-    # Character
     if data.get("character"):
         char = data["character"]
         meta = data.get("meta", {})
         emotion = meta.get("emotion", "Neutral")
-        
         table.add_row("[bold yellow]CHAR:[/bold yellow]", f"[bold]{char}[/bold] [italic]({emotion})[/italic]")
         table.add_row("", f"[dim]{meta.get('description', 'No description.')}[/dim]")
 
@@ -57,15 +52,11 @@ def get_descriptions_panel(data):
 
 def get_state_panel(data):
     table = Table(show_header=False, box=None, padding=(0, 1))
-    
-    # Label
     label = data.get("current_label", "Unknown")
     table.add_row("[bold green]Label:[/bold green]", label)
     
-    # Variables
     vars_dict = data.get("variables", {})
     updated_vars = vars_dict.get("__updated_vars", [])
-    
     table.add_row("", "")
     table.add_row("[bold]Recent Variables:[/bold]", "")
     
@@ -81,38 +72,53 @@ def get_state_panel(data):
 def display_game(data):
     layout = make_layout()
     
-    # Fill Upper Blocks
     layout["descriptions"].update(get_descriptions_panel(data))
     layout["state"].update(get_state_panel(data))
     
-    # Fill Lower Block (Dialogue)
-    if data["type"] == "talk":
-        char = data.get("character", "Narrator")
-        text = data.get("text", "")
-        dialogue_content = f"\n[bold yellow]{char}[/bold yellow]: {text}"
-        layout["lower"].update(Panel(dialogue_content, title="Dialogue", border_style="cyan"))
+    log = data.get("dialogue_log", [])
+    dialogue_lines = []
+    reversed_log = list(reversed(log))
+    
+    styles = [
+        "[bold yellow]{char}[/bold yellow]: [bold white]{text}[/bold white]",
+        "[dim yellow]{char}[/dim yellow]: [grey42]{text}[/grey42]",
+        "[grey30]{char}: {text}[/grey30]",
+        "[grey15]{char}: {text}[/grey15]",
+        "[grey11]{char}: {text}[/grey11]",
+        "[grey3]{char}: {text}[/grey3]"
+    ]
+
+    for i in range(min(len(reversed_log), 6)):
+        entry = reversed_log[i]
+        style = styles[i]
+        line = style.format(char=entry['character'], text=entry['text'])
+        dialogue_lines.insert(0, line)
+        
+    # Fixed height calculation for the 35% dialogue area
+    render_height = console.height - 3
+    dialogue_box_height = int(render_height * 0.35) - 2
+    total_text_lines = sum(len(line.split("\n")) + 1 for line in dialogue_lines)
+    num_newlines = max(0, dialogue_box_height - total_text_lines - 1)
+    
+    content = ("\n" * num_newlines) + "\n\n".join(dialogue_lines)
+    layout["dialogue"].update(Panel(content, title="Dialogue", border_style="cyan"))
+
+    sys_content = ""
+    if data["type"] == "missing_label":
+        sys_content = f"\n[bold red]System: Label '{data['meta']['target']}' is missing![/bold red]"
     elif data["type"] == "choice":
-        layout["lower"].update(Panel("\n[bold yellow]System:[/bold yellow] Waiting for choice...", title="Dialogue", border_style="cyan"))
-    elif data["type"] == "missing_label":
-        layout["lower"].update(Panel(f"\n[bold red]System:[/bold red] Label '{data['meta']['target']}' is missing!", title="Dialogue", border_style="red"))
+        options_text = ["[bold yellow]Available Choices:[/bold yellow]"]
+        for idx, opt in data["options"].items():
+            options_text.append(f"  {idx}. {opt['text']}")
+        sys_content = "\n" + "\n".join(options_text)
     elif data["type"] == "end":
-        layout["lower"].update(Panel(f"\n[bold red]{data['text']}[/bold red]", title="End", border_style="red"))
+        sys_content = f"\n[bold red]{data['text']}[/bold red]"
+    
+    layout["lower"].update(Panel(sys_content, title="System / Choices", border_style="yellow"))
 
     console.clear()
-    
-    # Constrain height to leave room for choices (approx 6-8 lines)
-    # This prevents the top blocks from being pushed off-screen
-    display_height = max(10, console.height - 8)
-    if data["type"] == "choice":
-        display_height = max(10, console.height - (len(data["options"]) + 6))
-        
-    console.print(layout, height=display_height)
-    
-    # Choices (Outside layout for easier interaction)
-    if data["type"] == "choice":
-        console.print("\n[bold]Choices:[/bold]")
-        for idx, opt in data["options"].items():
-            console.print(f"  {idx}. {opt['text']}")
+    console.print("\n") # Top Gap
+    console.print(layout, height=render_height)
 
 def main():
     session_id = sys.argv[1] if len(sys.argv) > 1 else "default"

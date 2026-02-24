@@ -64,6 +64,7 @@ class SessionState(BaseModel):
     line_index: int = 0
     variables: Dict[str, Any] = {}
     history: List[Dict[str, Any]] = []
+    dialogue_log: List[Dict[str, Any]] = []
 
 class GameUpdate(BaseModel):
     command: str  # [Number], R, B, E
@@ -79,9 +80,10 @@ class DialogueResponse(BaseModel):
     options: Optional[Dict[int, Dict[str, str]]] = None
     background: Optional[str] = None
     background_desc: Optional[str] = None
-    active_scene: Optional[Dict[str, str]] = None # {"name": "...", "content": "..."}
+    active_scene: Optional[Dict[str, str]] = None 
     active_animation: Optional[Dict[str, str]] = None
     variables: Optional[Dict[str, Any]] = None
+    dialogue_log: Optional[List[Dict[str, Any]]] = None
     meta: Optional[Dict[str, Any]] = {}
 
 # --- NARRAT PARSER ---
@@ -179,6 +181,7 @@ async def step_game(session_id: str, update: GameUpdate):
     if update.command == "R":
         parser.parse()
         state.line_index = 0
+        state.dialogue_log = []
         save_session(state)
         return await process_current_step(state, parser)
         
@@ -188,13 +191,15 @@ async def step_game(session_id: str, update: GameUpdate):
             state.current_label = last_state["current_label"]
             state.line_index = last_state["line_index"]
             state.variables = last_state.get("variables", {})
+            state.dialogue_log = last_state.get("dialogue_log", [])
             save_session(state)
         return await process_current_step(state, parser)
 
     state.history.append({
         "current_label": state.current_label,
         "line_index": state.line_index,
-        "variables": state.variables.copy()
+        "variables": state.variables.copy(),
+        "dialogue_log": state.dialogue_log.copy()
     })
     
     return await process_current_step(state, parser, update.command)
@@ -224,6 +229,12 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
         if talk_match:
             char = talk_match.group(1)
             text = talk_match.group(2)
+            
+            state.dialogue_log.append({"character": char, "text": text})
+            # Keep log reasonably sized
+            if len(state.dialogue_log) > 20:
+                state.dialogue_log.pop(0)
+
             meta = {
                 "profile": get_reference("characters", char, "profile"),
                 "description": get_reference("characters", char, "description"),
@@ -250,7 +261,8 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
                 background_desc=get_reference("backgrounds", current_bg) if current_bg != "None" else "",
                 active_scene=scene_data,
                 active_animation=anim_data,
-                variables=state.variables
+                variables=state.variables,
+                dialogue_log=state.dialogue_log
             )
 
         # background [name]
@@ -334,7 +346,8 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
                             current_label=state.current_label,
                             background=current_bg,
                             background_desc=get_reference("backgrounds", current_bg) if current_bg != "None" else "",
-                            variables=state.variables
+                            variables=state.variables,
+                            dialogue_log=state.dialogue_log
                         )
                     
                     state.current_label = target
@@ -350,7 +363,8 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
                 current_label=state.current_label,
                 background=current_bg,
                 background_desc=get_reference("backgrounds", current_bg) if current_bg != "None" else "",
-                variables=state.variables
+                variables=state.variables,
+                dialogue_log=state.dialogue_log
             )
 
         # if [expression]:
@@ -367,7 +381,8 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
         type="end", 
         text="Script error or end.", 
         current_label=state.current_label,
-        variables=state.variables
+        variables=state.variables,
+        dialogue_log=state.dialogue_log
     )
 
 import requests as sync_requests # For AI API call
