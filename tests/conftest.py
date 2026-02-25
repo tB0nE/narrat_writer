@@ -1,6 +1,10 @@
 import pytest
 import os
 import shutil
+import sys
+
+# Ensure the root directory is in the python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Set environment variable BEFORE importing app from main
 os.environ["GARRAT_GAMES_DIR"] = "test_games_tmp"

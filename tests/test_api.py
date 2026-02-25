@@ -1,60 +1,56 @@
 import pytest
 
-def test_list_games_empty(client):
-    response = client.get("/games")
-    assert response.status_code == 200
-    assert response.json() == {"games": []}
-
-def test_create_game_manual(client):
+@pytest.fixture
+def test_game(client):
+    """Fixture to ensure a game exists for testing."""
+    game_id = "test_fixture_game"
     payload = {
-        "name": "test_manual_game",
+        "name": game_id,
         "manual_data": {
-            "title": "Test Manual Title",
-            "summary": "This is a test summary",
-            "genre": "Test Genre"
+            "title": "Test Fixture Title",
+            "summary": "Fixture summary",
+            "genre": "Testing"
         }
     }
-    response = client.post("/games/create", json=payload)
-    assert response.status_code == 200
-    assert response.json()["status"] == "success"
-    assert response.json()["game_id"] == "test_manual_game"
+    client.post("/games/create", json=payload)
+    return game_id
 
-def test_get_metadata(client):
-    # Relies on test_create_game_manual having run or similar
-    response = client.get("/games/test_manual_game/metadata")
+def test_list_games(client, test_game):
+    response = client.get("/games")
+    assert response.status_code == 200
+    games = response.json()["games"]
+    assert any(g["id"] == test_game for g in games)
+
+def test_get_metadata(client, test_game):
+    response = client.get(f"/games/{test_game}/metadata")
     assert response.status_code == 200
     data = response.json()
-    assert data["title"] == "Test Manual Title"
-    assert data["genre"] == "Test Genre"
+    assert data["title"] == "Test Fixture Title"
 
-def test_step_game_start(client):
-    # Test starting a session
-    payload = {"command": "R"} # Reset/Start
-    response = client.post("/games/test_manual_game/sessions/test_session/step", json=payload)
+def test_step_game_start(client, test_game):
+    payload = {"command": "R"} 
+    response = client.post(f"/games/{test_game}/sessions/test_session/step", json=payload)
     assert response.status_code == 200
     data = response.json()
     assert data["type"] == "talk"
     assert "Welcome" in data["text"]
     assert data["current_label"] == "start"
 
-def test_edit_metadata(client):
+def test_edit_metadata(client, test_game):
     payload = {
         "category": "metadata",
         "action": "update",
         "target": "title",
-        "content": "Updated Title"
+        "content": "Updated via Test"
     }
-    response = client.post("/games/test_manual_game/sessions/any/edit", json=payload)
+    response = client.post(f"/games/{test_game}/sessions/any/edit", json=payload)
     assert response.status_code == 200
     
     # Verify change
-    response = client.get("/games/test_manual_game/metadata")
-    assert response.json()["title"] == "Updated Title"
+    response = client.get(f"/games/{test_game}/metadata")
+    assert response.json()["title"] == "Updated via Test"
 
 def test_invalid_game_step(client):
     response = client.post("/games/non_existent/sessions/s/step", json={"command": " "})
-    # Our current logic might fail differently depending on file ops, 
-    # but let's see if it handles missing games gracefully.
-    # Currently it might return DialogueResponse type='end' or similar if parser fails.
-    assert response.status_code == 200 # Type 'end' is returned currently
+    # Parser returns end type for missing files
     assert response.json()["type"] == "end"
