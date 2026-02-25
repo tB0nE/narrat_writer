@@ -75,7 +75,7 @@ def display_game(data):
     layout["descriptions"].update(get_descriptions_panel(data))
     layout["state"].update(get_state_panel(data))
     
-    log = data.get("dialogue_log", [])
+    log = data.get("dialogue_log") or []
     dialogue_lines = []
     reversed_log = list(reversed(log))
     

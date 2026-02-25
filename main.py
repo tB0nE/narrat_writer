@@ -318,6 +318,14 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
             state.variables["__updated_vars"] = updated_vars
             continue
 
+        # Jump: -> [label]
+        jump_match = re.match(r'^->\s+([\w_]+)', stripped)
+        if jump_match:
+            target = jump_match.group(1)
+            state.current_label = target
+            state.line_index = 0
+            continue
+
         # choice:
         if stripped == "choice:":
             options = {}
