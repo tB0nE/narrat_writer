@@ -9,6 +9,9 @@ import requests as sync_requests # For AI API call
 
 app = FastAPI(title="Headless Narrat API")
 
+# --- CONFIGURATION ---
+GAMES_DIR = os.getenv("GARRAT_GAMES_DIR", "games")
+
 # --- DATA MODELS ---
 
 class GameMetadata(BaseModel):
@@ -65,7 +68,7 @@ class EditRequest(BaseModel):
 # --- HELPERS ---
 
 def get_game_path(game_id: str, *subpaths):
-    return os.path.join("games", game_id, *subpaths)
+    return os.path.join(GAMES_DIR, game_id, *subpaths)
 
 def evaluate_expression(expr: str, variables: Dict[str, Any]) -> bool:
     expr = expr.strip()
@@ -172,10 +175,10 @@ def get_reference(game_id: str, category: str, name: str, sub_type: str = None) 
 
 @app.get("/games")
 async def list_games():
-    if not os.path.exists("games"): return {"games": []}
+    if not os.path.exists(GAMES_DIR): return {"games": []}
     games = []
-    for d in os.listdir("games"):
-        if os.path.isdir(os.path.join("games", d)):
+    for d in os.listdir(GAMES_DIR):
+        if os.path.isdir(os.path.join(GAMES_DIR, d)):
             meta = load_metadata(d)
             if meta: games.append({"id": d, "title": meta.title, "summary": meta.summary})
     return {"games": games}
