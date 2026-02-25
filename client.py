@@ -2,6 +2,8 @@ import sys
 import requests
 import os
 import json
+import time
+import subprocess
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -14,6 +16,29 @@ from rich.align import Align
 console = Console()
 BASE_URL = "http://localhost:8045"
 
+def ensure_server_running():
+    """Checks if server is up, starts it if not."""
+    try:
+        requests.get(f"{BASE_URL}/games", timeout=0.5)
+        return None # Already running
+    except:
+        # Start server using the same python interpreter
+        proc = subprocess.Popen(
+            [sys.executable, "main.py"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            preexec_fn=os.setsid # Ensure it gets its own process group for clean killing
+        )
+        # Wait for startup
+        for _ in range(15):
+            try:
+                requests.get(f"{BASE_URL}/games", timeout=0.5)
+                return proc
+            except:
+                time.sleep(0.5)
+        return proc
+
+# --- LAUNCHER UI ---
 # --- LAUNCHER UI ---
 
 class Launcher:
@@ -341,14 +366,22 @@ class GameEngine:
 # --- MAIN ---
 
 def main():
-    if len(sys.argv) > 1:
-        game_id = sys.argv[1]
-        session_id = sys.argv[2] if len(sys.argv) > 2 else "autosave"
-        engine = GameEngine(game_id, session_id)
-        engine.run()
-    else:
-        launcher = Launcher()
-        launcher.run()
+    server_proc = ensure_server_running()
+    
+    try:
+        if len(sys.argv) > 1:
+            game_id = sys.argv[1]
+            session_id = sys.argv[2] if len(sys.argv) > 2 else "autosave"
+            engine = GameEngine(game_id, session_id)
+            engine.run()
+        else:
+            launcher = Launcher()
+            launcher.run()
+    finally:
+        if server_proc:
+            console.print("[dim]Shutting down background server...[/dim]")
+            import signal
+            os.killpg(os.getpgid(server_proc.pid), signal.SIGTERM)
 
 if __name__ == "__main__":
     main()
