@@ -135,7 +135,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
         table = Table(title="Available Games")
         table.add_column("ID", style="cyan")
         table.add_column("Title", style="bold white")
-        table.add_column("Summary", dim=True)
+        table.add_column("Summary", style="dim")
         
         for g in games:
             table.add_row(g["id"], g["title"], g["summary"][:50] + "...")
