@@ -1,0 +1,7 @@
+*.json
+saves/
+__pycache__/
+.env
+.idea/
+*.iml
+config.json

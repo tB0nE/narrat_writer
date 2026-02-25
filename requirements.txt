@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+rich
+requests
+pydantic
+pytest
+httpx
