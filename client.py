@@ -56,7 +56,7 @@ class Launcher:
     def display_intro(self):
         layout = self.make_intro_layout()
         
-        logo = """
+        logo = r"""
 [bold cyan]
   _   _   _   ____    ____       _      _____               _ 
  | \ | | / \ |  _ \  |  _ \     / \    |_   _|  __ _  _ __ (_)
