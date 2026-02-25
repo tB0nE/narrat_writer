@@ -75,6 +75,7 @@ class GenerateRequest(BaseModel):
 class DialogueResponse(BaseModel):
     type: str  # talk, choice, background, end
     current_label: Optional[str] = None
+    line_index: Optional[int] = None
     character: Optional[str] = None
     text: Optional[str] = None
     options: Optional[Dict[int, Dict[str, str]]] = None
@@ -217,6 +218,7 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
                 type="end", 
                 text="End of script reached.", 
                 current_label=state.current_label,
+                line_index=state.line_index,
                 background=current_bg,
                 background_desc=get_reference("backgrounds", current_bg) if current_bg != "None" else "",
                 variables=state.variables
@@ -258,6 +260,7 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
                 text=text, 
                 meta=meta, 
                 current_label=state.current_label,
+                line_index=state.line_index,
                 background=current_bg,
                 background_desc=get_reference("backgrounds", current_bg) if current_bg != "None" else "",
                 active_scene=scene_data,
@@ -353,6 +356,7 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
                             text=f"Label '{target}' is missing.", 
                             meta={"target": target}, 
                             current_label=state.current_label,
+                            line_index=state.line_index,
                             background=current_bg,
                             background_desc=get_reference("backgrounds", current_bg) if current_bg != "None" else "",
                             variables=state.variables,
@@ -370,6 +374,7 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
                 type="choice", 
                 options=options, 
                 current_label=state.current_label,
+                line_index=state.line_index,
                 background=current_bg,
                 background_desc=get_reference("backgrounds", current_bg) if current_bg != "None" else "",
                 variables=state.variables,
@@ -390,6 +395,7 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
         type="end", 
         text="Script error or end.", 
         current_label=state.current_label,
+        line_index=state.line_index,
         variables=state.variables,
         dialogue_log=state.dialogue_log
     )

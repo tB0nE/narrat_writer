@@ -1,23 +1,39 @@
 import sys
 import requests
+import os
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.markdown import Markdown
 from rich.layout import Layout
 from rich.table import Table
+from rich.text import Text
 
 console = Console()
 BASE_URL = "http://localhost:8045"
+SHOW_SCRIPT = False
 
-def make_layout() -> Layout:
+def make_layout(show_script=False) -> Layout:
     layout = Layout()
-    layout.split_column(
-        Layout(name="upper", ratio=35),    # 35%
-        Layout(name="dialogue", ratio=35), # 35%
-        Layout(name="lower", ratio=30)     # 30%
-    )
-    layout["upper"].split_row(
+    if show_script:
+        layout.split_row(
+            Layout(name="main_col", ratio=7),
+            Layout(name="script_col", ratio=3)
+        )
+        layout["main_col"].split_column(
+            Layout(name="upper", ratio=35),
+            Layout(name="dialogue", ratio=35),
+            Layout(name="lower", ratio=30)
+        )
+    else:
+        layout.split_column(
+            Layout(name="upper", ratio=35),
+            Layout(name="dialogue", ratio=35),
+            Layout(name="lower", ratio=30)
+        )
+    
+    target = layout["main_col"] if show_script else layout
+    target["upper"].split_row(
         Layout(name="descriptions", ratio=1),
         Layout(name="state", ratio=1)
     )
@@ -69,11 +85,59 @@ def get_state_panel(data):
 
     return Panel(table, title="[bold]Current State[/bold]", border_style="green")
 
-def display_game(data):
-    layout = make_layout()
+def get_script_panel(data):
+    try:
+        with open("phase1.narrat", "r") as f:
+            lines = f.readlines()
+    except:
+        return Panel("Script file not found.", title="Script Viewer", border_style="red")
+
+    current_label = data.get("current_label", "")
+    target_line_idx = -1
     
-    layout["descriptions"].update(get_descriptions_panel(data))
-    layout["state"].update(get_state_panel(data))
+    # Find the global line index
+    for i, line in enumerate(lines):
+        if line.strip().startswith(f"label {current_label}:"):
+            target_line_idx = i + data.get("line_index", 0)
+            break
+
+    # Extract window of lines
+    # We leave room for the panel borders
+    render_height = console.height - 8
+    start = max(0, target_line_idx - (render_height // 2))
+    end = min(len(lines), start + render_height)
+    
+    table = Table(show_header=False, box=None, padding=(0, 1), collapse_padding=True)
+    table.add_column("num", justify="right", style="dim cyan", width=4)
+    table.add_column("content")
+
+    for i in range(start, end):
+        line_num = str(i + 1)
+        line_content = lines[i].rstrip()
+        
+        # Highlight current line
+        if i == target_line_idx:
+            table.add_row(
+                f"[bold cyan]{line_num}[/bold cyan]", 
+                Text(f"> {line_content}", style="bold white on grey15")
+            )
+        else:
+            table.add_row(line_num, line_content)
+
+    return Panel(table, title=f"Script: phase1.narrat", border_style="white", padding=(1, 1))
+
+def display_game(data, show_script=False):
+    layout = make_layout(show_script)
+    
+    # Resolve target columns
+    if show_script:
+        layout["script_col"].update(get_script_panel(data))
+        main = layout["main_col"]
+    else:
+        main = layout
+
+    main["descriptions"].update(get_descriptions_panel(data))
+    main["state"].update(get_state_panel(data))
     
     log = data.get("dialogue_log") or []
     dialogue_lines = []
@@ -94,14 +158,13 @@ def display_game(data):
         line = style.format(char=entry['character'], text=entry['text'])
         dialogue_lines.insert(0, line)
         
-    # Fixed height calculation for the 35% dialogue area
     render_height = console.height - 3
     dialogue_box_height = int(render_height * 0.35) - 2
     total_text_lines = sum(len(line.split("\n")) + 1 for line in dialogue_lines)
     num_newlines = max(0, dialogue_box_height - total_text_lines - 1)
     
     content = ("\n" * num_newlines) + "\n\n".join(dialogue_lines)
-    layout["dialogue"].update(Panel(content, title="Dialogue", border_style="cyan"))
+    main["dialogue"].update(Panel(content, title="Dialogue", border_style="cyan"))
 
     sys_content = ""
     if data["type"] == "missing_label":
@@ -114,14 +177,15 @@ def display_game(data):
     elif data["type"] == "end":
         sys_content = f"\n[bold red]{data['text']}[/bold red]"
     
-    layout["lower"].update(Panel(sys_content, title="System / Choices", border_style="yellow"))
+    main["lower"].update(Panel(sys_content, title="System / Choices", border_style="yellow"))
 
     console.clear()
-    console.print("\n") # Top Gap
+    console.print("\n")
     console.print(layout, height=render_height)
 
 def main():
     session_id = sys.argv[1] if len(sys.argv) > 1 else "default"
+    show_script = True
     
     try:
         response = requests.post(f"{BASE_URL}/session/{session_id}/step", json={"command": "R"})
@@ -131,7 +195,7 @@ def main():
         return
     
     while True:
-        display_game(data)
+        display_game(data, show_script)
         
         if data["type"] == "end":
             break
@@ -146,14 +210,17 @@ def main():
             else:
                 cmd = "B"
         else:
-            prompt_text = "\n[bold green][Enter] Next | [R]eload | [B]ack | [E]xit[/bold green]"
+            prompt_text = "\n[bold green][Enter] Next | [V]iew Script | [R]eload | [B]ack | [E]xit[/bold green]"
             if data["type"] == "choice":
-                prompt_text = "\n[bold green][Number] Choose | [R]eload | [B]ack | [E]xit[/bold green]"
+                prompt_text = "\n[bold green][Number] Choose | [V]iew Script | [R]eload | [B]ack | [E]xit[/bold green]"
             
             cmd = Prompt.ask(prompt_text)
         
         if cmd.upper() == "E":
             break
+        if cmd.upper() == "V":
+            show_script = not show_script
+            continue # Re-render with new toggle
         
         try:
             response = requests.post(f"{BASE_URL}/session/{session_id}/step", json={"command": cmd.upper() if cmd else " "})
