@@ -65,6 +65,7 @@ class SessionState(BaseModel):
     variables: Dict[str, Any] = {}
     history: List[Dict[str, Any]] = []
     dialogue_log: List[Dict[str, Any]] = []
+    last_type: str = "talk"
 
 class GameUpdate(BaseModel):
     command: str  # [Number], R, B, E
@@ -92,7 +93,7 @@ class DialogueResponse(BaseModel):
 class NarratParser:
     def __init__(self, filepath: str):
         self.filepath = filepath
-        self.labels = {}
+        self.labels = {} # name -> [(global_line_idx, text), ...]
         self.parse()
 
     def parse(self):
@@ -105,7 +106,7 @@ class NarratParser:
         current_label = None
         label_content = []
         
-        for line in lines:
+        for i, line in enumerate(lines):
             stripped = line.strip()
             if not stripped: continue
             
@@ -119,8 +120,7 @@ class NarratParser:
                 continue
             
             if current_label:
-                # Basic indentation check could be added, but for now just collect
-                label_content.append(line.rstrip())
+                label_content.append((i, line.rstrip()))
         
         if current_label:
             self.labels[current_label] = label_content
@@ -130,7 +130,7 @@ class NarratParser:
             return None
         if index >= len(self.labels[label]):
             return None
-        return self.labels[label][index]
+        return self.labels[label][index] # Returns (global_idx, text)
 
 # --- SESSION MANAGEMENT ---
 
@@ -187,6 +187,17 @@ async def step_game(session_id: str, update: GameUpdate):
         save_session(state)
         return await process_current_step(state, parser)
         
+    if update.command == "REFRESH":
+        parser.parse()
+        if state.last_type == "talk":
+            # Go back one line to re-process the current dialogue
+            state.line_index = max(0, state.line_index - 1)
+            # Remove from log so it's not double-added
+            if state.dialogue_log: state.dialogue_log.pop()
+        # Choices don't need line_index change because they already stay on the choice line
+        save_session(state)
+        return await process_current_step(state, parser)
+
     if update.command == "B":
         if state.history:
             last_state = state.history.pop()
@@ -212,8 +223,8 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
     current_anim = state.variables.get("__current_anim")
     
     while True:
-        line_text = parser.get_line(state.current_label, state.line_index)
-        if line_text is None:
+        line_data = parser.get_line(state.current_label, state.line_index)
+        if line_data is None:
             return DialogueResponse(
                 type="end", 
                 text="End of script reached.", 
@@ -224,6 +235,7 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
                 variables=state.variables
             )
         
+        global_idx, line_text = line_data
         stripped = line_text.strip()
         state.line_index += 1
         
@@ -244,6 +256,7 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
                 "placeholder": get_reference("characters", char, "idle"),
                 "emotion": state.variables.get(f"__emo_{char}", "Neutral")
             }
+            state.last_type = "talk"
             save_session(state)
             
             scene_data = None
@@ -335,8 +348,9 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
             opt_idx = 1
             temp_idx = state.line_index
             while True:
-                next_line = parser.get_line(state.current_label, temp_idx)
-                if not next_line: break
+                next_data = parser.get_line(state.current_label, temp_idx)
+                if not next_data: break
+                _, next_line = next_data
                 opt_match = re.search(r'label:\s+"(.*)"\s+->\s+([\w_]+)', next_line)
                 if opt_match:
                     options[opt_idx] = {"text": opt_match.group(1), "target": opt_match.group(2)}
@@ -366,9 +380,12 @@ async def process_current_step(state: SessionState, parser: NarratParser, comman
                     state.current_label = target
                     state.line_index = 0
                     save_session(state)
+                    # Use None for command to avoid infinite recursion if next label starts with choice
                     return await process_current_step(state, parser, None)
             
+            # If no command or invalid command, stay on the choice line
             state.line_index -= 1 
+            state.last_type = "choice"
             save_session(state)
             return DialogueResponse(
                 type="choice", 
@@ -510,6 +527,60 @@ Generate only the code and metadata.
         f.write("\n" + new_content)
     
     return {"status": "success"}
+
+class EditRequest(BaseModel):
+    category: str  # script, reference
+    action: str    # update, insert, delete, clear
+    target: str    # global_idx for script, filename for reference
+    content: Optional[str] = None
+    sub_category: Optional[str] = None # e.g., 'profile', 'description'
+
+@app.post("/session/{session_id}/edit")
+async def edit_game(session_id: str, req: EditRequest):
+    if req.category == "script":
+        idx = int(req.target)
+        with open("phase1.narrat", "r") as f:
+            lines = f.readlines()
+        
+        if req.action == "update":
+            # Preserve indentation
+            indent = re.match(r"^\s*", lines[idx]).group(0)
+            lines[idx] = f"{indent}{req.content}\n"
+        elif req.action == "insert":
+            indent = re.match(r"^\s*", lines[idx]).group(0)
+            lines.insert(idx + 1, f"{indent}{req.content}\n")
+        elif req.action == "delete" or req.action == "clear":
+            lines.pop(idx)
+        
+        with open("phase1.narrat", "w") as f:
+            f.writelines(lines)
+            
+    elif req.category == "reference":
+        path = ""
+        if req.sub_category == "background":
+            path = f"reference/backgrounds/{req.target}.txt"
+        elif req.sub_category == "character":
+            os.makedirs(f"reference/characters/{req.target}", exist_ok=True)
+            # Default to description if no specific type provided
+            type_suffix = req.meta.get("type", "description") if hasattr(req, 'meta') else "description"
+            path = f"reference/characters/{req.target}/{req.target}_{type_suffix}.txt"
+        elif req.sub_category == "scene":
+            path = f"reference/scenes/{req.target}.txt"
+            
+        if req.action == "update":
+            with open(path, "w") as f:
+                f.write(req.content)
+        elif req.action == "clear":
+            if os.path.exists(path): os.remove(path)
+            
+    return {"status": "success"}
+
+@app.get("/assets/{category}")
+async def list_assets(category: str):
+    path = f"reference/{category}"
+    if category == "characters":
+        return {"assets": [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))]}
+    return {"assets": [f.replace(".txt", "") for f in os.listdir(path) if f.endswith(".txt")]}
 
 if __name__ == "__main__":
     import uvicorn
