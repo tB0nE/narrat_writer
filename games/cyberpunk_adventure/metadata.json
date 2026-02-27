@@ -1,0 +1,7 @@
+{
+    "title": "Cyberpunk Adventure",
+    "summary": "A neon-drenched journey through the streets of Neo-Tokyo as Anya, a skilled hacker caught in a web of corporate intrigue.",
+    "genre": "Cyberpunk",
+    "characters": ["Anya"],
+    "starting_point": "main"
+}
