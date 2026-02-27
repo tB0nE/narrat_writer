@@ -72,12 +72,12 @@ class Launcher:
 A CLI-based development environment for writing and playing visual novels. 
 Experience immersive storytelling, dynamic AI generation, and real-time script editing.
 
-[dim]Version 1.0.0[/dim]
+[dim]Version 1.1.0[/dim]
         """
         
         layout["left"].update(Panel(Align.center(logo + description, vertical="middle"), border_style="cyan"))
         
-        options = "[1] Create Game\n[2] Select Game\n[X] Exit"
+        options = "[1] Create Game\n[2] Select Game\n[O] Options\n[X] Exit"
         layout["right"].update(Panel(Align.center(options, vertical="middle"), title="Menu", border_style="yellow"))
         
         console.clear()
@@ -86,7 +86,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
     def run(self):
         while True:
             self.display_intro()
-            choice = Prompt.ask("\n[bold green]Select Option[/bold green]", choices=["1", "2", "X", "x"])
+            choice = Prompt.ask("\n[bold green]Select Option[/bold green]", choices=["1", "2", "O", "o", "X", "x"])
             
             if choice.upper() == "X":
                 console.print("[red]Exiting...[/red]")
@@ -95,6 +95,26 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                 self.create_game_flow()
             elif choice == "2":
                 self.select_game_flow()
+            elif choice.upper() == "O":
+                self.global_options_flow()
+
+    def global_options_flow(self):
+        while True:
+            res = requests.get(f"{BASE_URL}/config")
+            config = res.json()
+            console.clear()
+            table = Table(title="Global Options")
+            table.add_column("Key", style="cyan")
+            table.add_column("Value", style="bold white")
+            table.add_row("Prompt Prefix", config.get("global_prompt_prefix", "None"))
+            console.print(table)
+            
+            choice = Prompt.ask("\n[1] Edit Prompt Prefix | [B]ack", choices=["1", "B", "b"])
+            if choice.upper() == "B": break
+            
+            if choice == "1":
+                new_prefix = Prompt.ask("Enter new global prompt prefix")
+                requests.post(f"{BASE_URL}/config", json={"global_prompt_prefix": new_prefix})
 
     def create_game_flow(self):
         console.clear()
@@ -107,21 +127,35 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
         if method == "1":
             console.print("\n[bold cyan]AI Guidance:[/bold cyan]")
             console.print("Describe your game idea. Include [italic]Genre, Setting, Characters, and Plot hooks.[/italic]")
-            console.print("Example: [dim]A dark fantasy world where magic is illegal. You play as a rogue alchemist trying to save their sibling from the Inquisitors.[/dim]")
             prompt = Prompt.ask("\n[bold green]Enter your prompt[/bold green]")
-            with console.status("[bold green]AI is scaffolding your game...[/bold green]"):
-                res = requests.post(f"{BASE_URL}/games/create", json={"name": game_id, "prompt": prompt})
+            
+            while True:
+                with console.status("[bold green]AI is scaffolding your game...[/bold green]"):
+                    res = requests.post(f"{BASE_URL}/games/create", json={"name": game_id, "prompt": prompt})
+                
+                if res.status_code == 200:
+                    console.print(f"[green]Game '{game_id}' created successfully![/green]")
+                    self.game_hub(game_id)
+                    return
+                else:
+                    error_detail = res.json().get('detail', 'Unknown error')
+                    console.print(Panel(f"[red]Error:[/red] {error_detail}", title="Generation Failed", border_style="red"))
+                    choice = Prompt.ask("Action: [R]etry same prompt | [E]dit prompt | [B]ack to menu", choices=["R", "E", "B", "r", "e", "b"])
+                    
+                    if choice.upper() == "B": return
+                    if choice.upper() == "E":
+                        prompt = Prompt.ask("\n[bold green]Enter new prompt[/bold green]")
+                    # If 'R', it just loops and hits the status context again
         else:
             title = Prompt.ask("Game Title")
             summary = Prompt.ask("Game Summary")
             res = requests.post(f"{BASE_URL}/games/create", json={"name": game_id, "manual_data": {"title": title, "summary": summary, "genre": "Custom"}})
-
-        if res.status_code == 200:
-            console.print(f"[green]Game '{game_id}' created successfully![/green]")
-            self.game_hub(game_id)
-        else:
-            console.print(f"[red]Error: {res.json().get('detail', 'Unknown error')}[/red]")
-            Prompt.ask("[Enter] to continue")
+            if res.status_code == 200:
+                console.print(f"[green]Game '{game_id}' created successfully![/green]")
+                self.game_hub(game_id)
+            else:
+                console.print(f"[red]Error: {res.json().get('detail', 'Unknown error')}[/red]")
+                Prompt.ask("[Enter] to continue")
 
     def select_game_flow(self):
         res = requests.get(f"{BASE_URL}/games")
@@ -161,7 +195,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
             
             layout["left"].update(Panel(Align.center(info, vertical="middle"), border_style="cyan"))
             
-            options = "[1] Start New Game\n[2] Load Game\n[3] Edit Metadata\n[B]ack"
+            options = "[1] Start New Game\n[2] Load Game\n[3] Edit Options\n[B]ack"
             layout["right"].update(Panel(Align.center(options, vertical="middle"), title="Game Hub", border_style="yellow"))
             
             console.clear()
@@ -184,17 +218,18 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
     def edit_metadata_flow(self, game_id, meta):
         while True:
             console.clear()
-            table = Table(title=f"Edit Metadata: {meta['title']}")
+            table = Table(title=f"Edit Options: {meta['title']}")
             table.add_column("Option", style="cyan")
             table.add_column("Field", style="bold")
-            table.add_column("Current Value", dim=True)
+            table.add_column("Current Value", style="dim")
             table.add_row("1", "Title", meta["title"])
             table.add_row("2", "Summary", meta["summary"][:50] + "...")
             table.add_row("3", "Genre", meta["genre"])
             table.add_row("4", "Plot Outline", (meta.get("plot_outline") or "N/A")[:50] + "...")
+            table.add_row("5", "Prompt Prefix", (meta.get("prompt_prefix") or "None")[:50] + "...")
             console.print(table)
             
-            choice = Prompt.ask("\nSelect field to edit, [R]egenerate All, or [B]ack", choices=["1", "2", "3", "4", "R", "r", "B", "b"])
+            choice = Prompt.ask("\nSelect field to edit, [R]egenerate All, or [B]ack", choices=["1", "2", "3", "4", "5", "R", "r", "B", "b"])
             if choice.upper() == "B": break
             
             if choice.upper() == "R":
@@ -209,7 +244,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                 Prompt.ask("[Enter] to continue")
                 continue
 
-            fields = {"1": "title", "2": "summary", "3": "genre", "4": "plot_outline"}
+            fields = {"1": "title", "2": "summary", "3": "genre", "4": "plot_outline", "5": "prompt_prefix"}
             field = fields[choice]
             new_val = Prompt.ask(f"Enter new {field}")
             

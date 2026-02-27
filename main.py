@@ -2,10 +2,23 @@ import os
 import json
 import re
 import shutil
+import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Dict, List, Optional, Any
 import requests as sync_requests # For AI API call
+import prompts
+
+# --- LOGGING SETUP ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("narrat_api.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("narrat_api")
 
 app = FastAPI(title="Headless Narrat API")
 
@@ -21,6 +34,7 @@ class GameMetadata(BaseModel):
     characters: List[str] = []
     starting_point: str = "start"
     plot_outline: Optional[str] = None
+    prompt_prefix: Optional[str] = None
 
 class CreateGameRequest(BaseModel):
     name: str # The folder name/ID
@@ -66,6 +80,51 @@ class EditRequest(BaseModel):
     meta: Optional[Dict[str, Any]] = {}
 
 # --- HELPERS ---
+
+def call_llm(prompt: str, retries: int = 3, game_id: str = None) -> str:
+    """
+    Core LLM API wrapper with retry logic, global/local prompt_prefix support, 
+    and detailed logging.
+    """
+    with open("config.json", "r") as f:
+        config = json.load(f)
+    
+    # Prefix Logic
+    prefix = ""
+    # 1. Global Prefix
+    if config.get("global_prompt_prefix"):
+        prefix = config.get("global_prompt_prefix")
+    
+    # 2. Per-Game Prefix (overrides global)
+    if game_id:
+        meta = load_metadata(game_id)
+        if meta and meta.prompt_prefix:
+            prefix = meta.prompt_prefix
+            
+    final_prompt = f"{prefix}\n\n{prompt}" if prefix else prompt
+
+    if config.get("api_key") == "YOUR_API_KEY_HERE":
+        logger.warning("API Key not configured. Returning fallback data.")
+        return '{"title": "Unconfigured Game", "summary": "Please set your API key in config.json", "genre": "System", "characters": [], "starting_point": "start", "plot_outline": ""}'
+
+    headers = {"Authorization": f"Bearer {config['api_key']}", "Content-Type": "application/json"}
+    payload = {"model": config["model"], "messages": [{"role": "user", "content": final_prompt}]}
+    
+    for attempt in range(retries):
+        try:
+            logger.info(f"AI Request (Attempt {attempt + 1}/{retries}): {final_prompt[:100]}...")
+            res = sync_requests.post(config["api_url"], json=payload, headers=headers, timeout=90)
+            res.raise_for_status()
+            content = res.json()["choices"][0]["message"]["content"]
+            logger.info(f"AI Response received: {len(content)} chars.")
+            return content
+        except Exception as e:
+            logger.error(f"AI Attempt {attempt + 1} failed: {str(e)}")
+            if attempt == retries - 1:
+                raise HTTPException(status_code=502, detail=f"AI Service Error: {str(e)}")
+            import time
+            time.sleep(1)
+    return ""
 
 def get_game_path(game_id: str, *subpaths):
     return os.path.join(GAMES_DIR, game_id, *subpaths)
@@ -173,6 +232,24 @@ def get_reference(game_id: str, category: str, name: str, sub_type: str = None) 
 
 # --- API ENDPOINTS ---
 
+# --- CONFIGURATION ENDPOINTS ---
+
+@app.get("/config")
+async def get_api_config():
+    """Returns the current API and global configuration."""
+    with open("config.json", "r") as f:
+        return json.load(f)
+
+@app.post("/config")
+async def update_api_config(new_config: Dict[str, Any]):
+    """Updates and persists the global configuration."""
+    with open("config.json", "r") as f:
+        config = json.load(f)
+    config.update(new_config)
+    with open("config.json", "w") as f:
+        json.dump(config, f, indent=4)
+    return {"status": "success", "config": config}
+
 @app.get("/games")
 async def list_games():
     if not os.path.exists(GAMES_DIR): return {"games": []}
@@ -193,30 +270,58 @@ async def get_game_metadata(game_id: str):
 async def create_game(req: CreateGameRequest):
     game_dir = get_game_path(req.name)
     if os.path.exists(game_dir): raise HTTPException(status_code=400, detail="Game already exists")
+    
+    meta = None
+    if req.prompt:
+        ai_prompt = prompts.CREATE_GAME_PROMPT.format(user_prompt=req.prompt)
+        try:
+            raw = call_llm(ai_prompt, game_id=req.name)
+            match = re.search(r'\{.*\}', raw, re.DOTALL)
+            if match:
+                json_str = match.group(0)
+                try:
+                    meta = GameMetadata(**json.loads(json_str))
+                except json.JSONDecodeError as je:
+                    logger.error(f"JSON Decode Error at char {je.pos}: {je.msg}")
+                    logger.error(f"Raw section that failed: {json_str}")
+                    raise HTTPException(status_code=500, detail=f"AI returned invalid JSON: {je.msg}")
+            else:
+                logger.error(f"Failed to find JSON in AI response: {raw}")
+                raise HTTPException(status_code=500, detail="AI returned invalid format (no JSON found)")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Unexpected error during AI game creation")
+            raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+    else: meta = req.manual_data or GameMetadata(title=req.name, summary="Custom", genre="Blank")
+    
+    # Create structure ONLY if we have meta and no error raised above
     os.makedirs(os.path.join(game_dir, "reference", "backgrounds"), exist_ok=True)
     os.makedirs(os.path.join(game_dir, "reference", "characters"), exist_ok=True)
     os.makedirs(os.path.join(game_dir, "reference", "scenes"), exist_ok=True)
     os.makedirs(os.path.join(game_dir, "reference", "animations"), exist_ok=True)
     os.makedirs(os.path.join(game_dir, "saves"), exist_ok=True)
-    meta = None
-    if req.prompt:
-        with open("config.json", "r") as f: config = json.load(f)
-        if config["api_key"] == "YOUR_API_KEY_HERE":
-            meta = GameMetadata(title=req.name, summary="Fallback", genre="General")
-        else:
-            ai_prompt = f"Create a visual novel concept: {req.prompt}. Return ONLY JSON: {{title, summary, genre, characters, starting_point, plot_outline}}"
-            headers = {"Authorization": f"Bearer {config['api_key']}", "Content-Type": "application/json"}
-            payload = {"model": config["model"], "messages": [{"role": "user", "content": ai_prompt}]}
-            try:
-                res = sync_requests.post(config["api_url"], json=payload, headers=headers)
-                raw = res.json()["choices"][0]["message"]["content"]
-                match = re.search(r'\{.*\}', raw, re.DOTALL)
-                if match: meta = GameMetadata(**json.loads(match.group(0)))
-            except: meta = GameMetadata(title=req.name, summary="AI Error", genre="Unknown")
-    else: meta = req.manual_data or GameMetadata(title=req.name, summary="Custom", genre="Blank")
+
     save_metadata(req.name, meta)
+    
+    # Generate Initial Script
+    logger.info(f"Generating initial script for {meta.title}...")
+    script_prompt = prompts.INITIAL_SCRIPT_PROMPT.format(
+        metadata=meta.model_dump_json(indent=2),
+        starting_point=meta.starting_point
+    )
+    try:
+        initial_script = call_llm(script_prompt, game_id=req.name)
+        # Clean up any potential markdown formatting if the AI added it
+        initial_script = re.sub(r'^```narrat\s*\n?', '', initial_script, flags=re.MULTILINE)
+        initial_script = re.sub(r'\n?```$', '', initial_script, flags=re.MULTILINE)
+    except:
+        logger.warning("Failed to generate AI script, falling back to simple template.")
+        initial_script = f"label {meta.starting_point}:\n    talk narrator \"Welcome to {meta.title}.\"\n    choice:\n        label: \"Explore\" -> explore_start\n\nlabel explore_start:\n    talk narrator \"Exploration.\"\n    -> {meta.starting_point}\n"
+
     with open(os.path.join(game_dir, "phase1.narrat"), "w") as f:
-        f.write(f"label {meta.starting_point}:\n    talk narrator \"Welcome to {meta.title}.\"\n    choice:\n        label: \"Explore\" -> explore_start\n\nlabel explore_start:\n    talk narrator \"Exploration.\"\n    -> {meta.starting_point}\n")
+        f.write(initial_script)
+    
     return {"status": "success", "game_id": req.name}
 
 @app.post("/games/{game_id}/sessions/{session_id}/step")
