@@ -4,6 +4,7 @@ import os
 import json
 import time
 import subprocess
+import re
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
