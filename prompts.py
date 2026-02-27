@@ -81,6 +81,18 @@ REGENERATE_METADATA_PROMPT = """Update the following visual novel metadata based
 Current Metadata: {current_metadata}
 Return ONLY JSON in the same format."""
 
+ASSET_DESCRIPTION_PROMPT = """You are a creative writer for a visual novel.
+Based on the game concept below, write a detailed description for the following asset: {asset_id} ({asset_type}).
+
+Game Metadata:
+{metadata}
+
+Requirements:
+- If it's a character, describe their appearance, personality, and role in the story.
+- If it's a background, describe the atmosphere, lighting, and key details of the location.
+- Keep it to 1-2 descriptive paragraphs.
+- Return ONLY the description text."""
+
 INITIAL_SCRIPT_PROMPT = """You are a Narrat script writer. 
 Based on the following game concept, write the opening scene (about 20-30 lines of dialogue and descriptions).
 
@@ -110,7 +122,7 @@ main:
             jump stay_behind
 
 Requirements for this script:
-- Start with 'label {starting_point}:'.
+- Start with '{starting_point}:'.
 - Use characters and themes from the metadata.
 - End with a choice that leads to at least one other stub label.
 - Return ONLY the script."""

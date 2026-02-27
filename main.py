@@ -342,6 +342,8 @@ async def step_game(game_id: str, session_id: str, update: GameUpdate):
     
     if update.command == "R":
         parser.parse()
+        meta = load_metadata(game_id)
+        state.current_label = meta.starting_point if meta else "main"
         state.line_index, state.dialogue_log, state.history = 0, [], []
         save_session(game_id, state)
         return await process_current_step(game_id, state, parser)
@@ -640,9 +642,50 @@ async def regenerate_metadata(game_id: str, req: CreateGameRequest):
 
 @app.get("/games/{game_id}/assets/{category}")
 async def list_assets(game_id: str, category: str):
+    """Lists existing asset IDs for a given category (backgrounds, characters, etc.)."""
     p = get_game_path(game_id, "reference", category)
     assets = [f.replace(".txt", "") for f in os.listdir(p) if f.endswith(".txt")] if os.path.exists(p) else []
     return {"assets": assets}
+
+@app.post("/games/{game_id}/assets/generate")
+async def generate_asset_description(game_id: str, req: Dict[str, str]):
+    """Generates a description for a missing asset (character or background) via AI."""
+    category = req.get("category") # backgrounds, characters
+    target = req.get("target")     # asset id
+    sub_type = req.get("sub_type", "description") # profile, description
+    
+    meta = load_metadata(game_id)
+    prompt = prompts.ASSET_DESCRIPTION_PROMPT.format(
+        asset_id=target,
+        asset_type=f"{category} {sub_type}",
+        metadata=meta.model_dump_json(indent=2) if meta else "No metadata"
+    )
+    
+    try:
+        logger.info(f"Generating AI description for {category}/{target}...")
+        description = call_llm(prompt, game_id=game_id)
+        description = re.sub(r'^```[\w]*\s*\n?', '', description, flags=re.MULTILINE)
+        description = re.sub(r'\n?```$', '', description, flags=re.MULTILINE)
+        
+        # Determine path
+        ref_p = ""
+        if category == "backgrounds": 
+            ref_p = get_game_path(game_id, "reference", "backgrounds", f"{target}.txt")
+        elif category == "characters":
+            os.makedirs(get_game_path(game_id, "reference", "characters", target), exist_ok=True)
+            ref_p = get_game_path(game_id, "reference", "characters", target, f"{target}_{sub_type}.txt")
+        
+        if ref_p:
+            os.makedirs(os.path.dirname(ref_p), exist_ok=True)
+            with open(ref_p, "w") as f:
+                f.write(description)
+            logger.info(f"Successfully saved AI description to {ref_p}")
+            return {"status": "success", "content": description}
+        else:
+            raise HTTPException(status_code=400, detail="Invalid asset category")
+    except Exception as e:
+        logger.exception("Asset generation failed")
+        raise HTTPException(status_code=502, detail=f"Generation failed: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

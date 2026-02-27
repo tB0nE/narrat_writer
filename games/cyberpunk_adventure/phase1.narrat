@@ -1,20 +1,25 @@
-label start:
+main:
     background anya_bedroom
     talk anya "The rain never stops in this city. Just like the data."
     set has_woken_up 1
     choice:
-        label: "Check the terminal." -> hacking_terminal
-        label: "Look out the window." -> neon_view
-        label: "Head to the Afterlife Club." -> underground_club
+        "Check the terminal.":
+            jump hacking_terminal
+        "Look out the window.":
+            jump neon_view
+        "Head to the Afterlife Club.":
+            jump underground_club
 
-label neon_view:
+neon_view:
     background anya_bedroom
     talk anya "The city looks like a circuit board from up here. A glitch waiting to happen."
     choice:
-        label: "Go back to the terminal." -> hacking_terminal
-        label: "Head to the club." -> underground_club
+        "Go back to the terminal.":
+            jump hacking_terminal
+        "Head to the club.":
+            jump underground_club
 
-label hacking_terminal:
+hacking_terminal:
     background server_room
     scene anya_typing
     set_expression anya focused
@@ -24,38 +29,47 @@ label hacking_terminal:
     talk anya "The encryption is heavier than I expected. I can brute force it, but they'll trace the signal instantly."
     talk anya "Or I can take the slow route and bypass the ICE manually. Safer, but boring."
     choice:
-        label: "Brute Force It" -> brute_force_path
-        label: "Bypass Silently" -> silent_path
-        label: "It's not worth the risk" -> start
+        "Brute Force It":
+            jump brute_force_path
+        "Bypass Silently":
+            jump silent_path
+        "It's not worth the risk":
+            jump main
 
-label brute_force_path:
+brute_force_path:
     talk anya "Screw it. Sometimes you just need to kick the door down."
     set security_level 0
     talk anya "Firewall breached. But I definitely tripped an alarm. We should move."
-    -> start
+    jump main
 
-label silent_path:
+silent_path:
     talk anya "Patience is a virtue, right? Initiating silent bypass."
     set security_level 100
     talk anya "Done. I'm in, and nobody's the wiser."
-    -> start
+    jump main
 
-label underground_club:
+underground_club:
     background neon_club
     talk anya "The air filters here haven't been serviced since the last corporate war. I can taste the recycled sweat."
     talk anya "I'm not here for the atmosphere. I need to find the data broker before this headache gets any worse."
     choice:
-        label: "Scan the room for signals" -> scan_crowd
-        label: "Head to the bar" -> club_bar
-        label: "Leave. It's not worth the noise." -> start
+        "Scan the room for signals":
+            jump scan_crowd
+        "Head to the bar":
+            jump club_bar
+        "Leave. It's not worth the noise.":
+            jump main
 
-label club_bar:
+club_bar:
     background club_bar_interior
     set_expression anya annoyed
     talk anya "The bass here is violent. I can feel it rattling my ribs even through the sound dampeners."
     talk anya "A chaotic mess of bodies and bad decisions. Practically a security nightmare, but anonymity has its perks."
     talk anya "The bartender looks like he's seen three economic collapses. He might know something useful."
     choice:
-        label: "Order a drink" -> start
-        label: "Scan the local network" -> start
-        label: "Leave" -> start
+        "Order a drink":
+            jump main
+        "Scan the local network":
+            jump main
+        "Leave":
+            jump main

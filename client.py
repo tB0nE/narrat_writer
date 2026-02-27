@@ -373,8 +373,33 @@ class GameEngine:
                     if c != "B": requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "script", "action": "update", "target": str(idx), "content": f"background {c}"})
             elif p == "2":
                 bg = self.data.get("background", "None")
-                nd = Prompt.ask(f"  New Desc for {bg}")
-                requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "reference", "action": "update", "sub_category": "background", "target": bg, "content": nd})
+                nd = Prompt.ask(f"  New Desc for {bg} (or [G]enerate with AI)", default="G")
+                if nd.upper() == "G":
+                    with console.status(f"[bold green]AI is describing {bg}...[/bold green]"):
+                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/assets/generate", json={"category": "backgrounds", "target": bg})
+                    if res.status_code == 200:
+                        console.print(f"[green]AI described {bg}![/green]")
+                    else:
+                        console.print(f"[red]Generation failed: {res.json().get('detail')}[/red]")
+                        Prompt.ask("[Enter] to continue")
+                else:
+                    requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "reference", "action": "update", "sub_category": "background", "target": bg, "content": nd})
+        elif et == "2": # Edit Char
+            char = self.data.get("character")
+            if not char:
+                console.print("[red]No character active.[/red]")
+                Prompt.ask("[Enter] to continue")
+                return
+            p = Prompt.ask("  [1] Desc | [2] Profile | [G]enerate All", choices=["1", "2", "G", "g"])
+            if p.upper() == "G":
+                with console.status(f"[bold green]AI is describing {char}...[/bold green]"):
+                    requests.post(f"{BASE_URL}/games/{self.game_id}/assets/generate", json={"category": "characters", "target": char, "sub_type": "description"})
+                    requests.post(f"{BASE_URL}/games/{self.game_id}/assets/generate", json={"category": "characters", "target": char, "sub_type": "profile"})
+                console.print(f"[green]AI described {char}![/green]")
+            else:
+                suffix = "description" if p == "1" else "profile"
+                nd = Prompt.ask(f"  New {suffix} for {char}")
+                requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "reference", "action": "update", "sub_category": "character", "target": char, "content": nd, "meta": {"type": suffix}})
         elif et == "3":
             new_text = Prompt.ask("  New Text")
             requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "script", "action": "update", "target": str(idx), "content": f"talk {self.data.get('character', 'narrator')} \"{new_text}\""})
