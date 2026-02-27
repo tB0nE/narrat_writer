@@ -340,6 +340,11 @@ async def step_game(game_id: str, session_id: str, update: GameUpdate):
     state = load_session(game_id, session_id)
     parser = NarratParser(game_id)
     
+    # Pre-check if current label exists at all
+    if state.current_label not in parser.labels:
+        logger.warning(f"Session loaded at missing label '{state.current_label}'.")
+        return DialogueResponse(type="missing_label", meta={"target": state.current_label}, text=f"Label '{state.current_label}' is missing.", variables=state.variables, dialogue_log=state.dialogue_log)
+
     if update.command == "R":
         parser.parse()
         meta = load_metadata(game_id)
@@ -376,11 +381,12 @@ async def process_current_step(game_id: str, state: SessionState, parser: Narrat
     while True:
         line_data = parser.get_line(state.current_label, state.line_index)
         if line_data is None:
-            # If line 0 is missing, it's a jump to a missing label -> Trigger AI flow
-            if state.line_index == 0:
-                logger.warning(f"Label '{state.current_label}' is missing! Triggering AI request flow.")
+            # If the label itself doesn't exist in the parser at all, it's definitely missing
+            if state.current_label not in parser.labels:
+                logger.warning(f"Label '{state.current_label}' is missing from script! Triggering AI request flow.")
                 return DialogueResponse(type="missing_label", meta={"target": state.current_label}, text=f"Label '{state.current_label}' is missing.", variables=state.variables, dialogue_log=state.dialogue_log)
             
+            # If the label exists but we ran out of lines, it's the end of that script part
             logger.info(f"End of label '{state.current_label}' reached at index {state.line_index}.")
             return DialogueResponse(type="end", text="End.", current_label=state.current_label, line_index=state.line_index, variables=state.variables, dialogue_log=state.dialogue_log)
         
