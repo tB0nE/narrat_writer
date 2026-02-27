@@ -301,14 +301,42 @@ class GameEngine:
         try:
             with open(f"games/{self.game_id}/phase1.narrat", "r") as f: lines = f.readlines()
         except: return Panel("Script file not found.", title="Script Viewer", border_style="red")
-        curr_label, target_line_idx = self.data.get("current_label", ""), -1
+        
+        curr_label = self.data.get("current_label", "")
+        logical_index = self.data.get("line_index", 0)
+        target_line_idx = -1
+        
+        # 1. Find the label line
+        label_file_idx = -1
         for i, line in enumerate(lines):
-            # Support both 'label name:' and 'name:'
             if re.match(rf"^(?:label\s+)?{curr_label}:\s*(?://.*)?$", line.strip()):
-                target_line_idx = i + self.data.get("line_index", 0)
+                label_file_idx = i
                 break
+        
+        if label_file_idx != -1:
+            # 2. Match the logical index to physical lines, skipping blanks/comments
+            current_logical = 0
+            target_line_idx = label_file_idx # Default to label if index is 0
+            
+            for i in range(label_file_idx + 1, len(lines)):
+                if current_logical >= logical_index:
+                    break
+                
+                stripped = lines[i].strip()
+                if not stripped or stripped.startswith("//"):
+                    continue # Skip whitespace/comments
+                
+                # If we hit another label, we've gone too far (shouldn't happen with valid index)
+                if re.match(r"^(?:label\s+)?[\w_]+:\s*(?://.*)?$", stripped):
+                    break
+                    
+                target_line_idx = i
+                current_logical += 1
+        
         h = console.height - 8
-        start, end = max(0, target_line_idx - (h // 2)), min(len(lines), target_line_idx + h // 2)
+        # Ensure target_line_idx is valid for display
+        display_idx = max(0, target_line_idx)
+        start, end = max(0, display_idx - (h // 2)), min(len(lines), display_idx + h // 2)
         table = Table(show_header=False, box=None, padding=(0, 1), collapse_padding=True)
         table.add_column("num", justify="right", style="dim cyan", width=4)
         table.add_column("content")
