@@ -386,8 +386,20 @@ class GameEngine:
             self.display_game()
             
             if self.data["type"] == "end":
-                cmd = Prompt.ask("\n[bold red]End of Script.[/bold red] [R]estart | E[X]it", choices=["R", "r", "X", "x"])
-                if cmd.upper() == "R":
+                cmd = Prompt.ask("\n[bold red]End of Script.[/bold red] [G]enerate More | [R]estart | E[X]it", choices=["G", "g", "R", "r", "X", "x"])
+                if cmd.upper() == "G":
+                    with console.status("[bold green]AI is writing more...[/bold green]"):
+                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/continue")
+                    if res.status_code == 200:
+                        # Re-step to start the new content
+                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
+                        self.data = res.json()
+                        continue
+                    else:
+                        console.print(f"[red]Error: {res.json().get('detail')}[/red]")
+                        Prompt.ask("[Enter] to continue")
+                        continue
+                elif cmd.upper() == "R":
                     res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
                     self.data = res.json()
                     continue

@@ -540,6 +540,49 @@ async def generate_label(game_id: str, session_id: str, req: GenerateRequest):
         logger.exception("Failed to generate story continuation")
         raise HTTPException(status_code=502, detail=f"Story generation failed: {str(e)}")
 
+@app.post("/games/{game_id}/sessions/{session_id}/continue")
+async def continue_story(game_id: str, session_id: str):
+    """Generates more content when the current script ends."""
+    state = load_session(game_id, session_id)
+    meta = load_metadata(game_id)
+    
+    # Create a new label name
+    next_label = f"{state.current_label}_cont"
+    
+    # Build context
+    context_lines = [f"{d['character']}: {d['text']}" for d in state.dialogue_log[-20:]]
+    context_str = "\n".join(context_lines)
+    
+    prompt = prompts.CONTINUE_STORY_PROMPT.format(
+        context=context_str,
+        metadata=meta.model_dump_json(indent=2) if meta else "No metadata",
+        current_label=state.current_label,
+        next_label=next_label
+    )
+    
+    try:
+        logger.info(f"Continuing story from label: {state.current_label} -> {next_label}")
+        new_content = call_llm(prompt, game_id=game_id)
+        new_content = re.sub(r'^```[\w]*\s*\n?', '', new_content, flags=re.MULTILINE)
+        new_content = re.sub(r'\n?```$', '', new_content, flags=re.MULTILINE)
+        
+        # Append jump to the old label and then the new label content
+        p = get_game_path(game_id, "phase1.narrat")
+        with open(p, "a") as f:
+            # We need to find where the old label ended and add a jump
+            # For simplicity in this headless engine, we just append it
+            f.write(f"\n\n// Story continued via AI\n{next_label}:\n{new_content}\n")
+            
+        # Update the session to point to the new label
+        state.current_label = next_label
+        state.line_index = 0
+        save_session(game_id, state)
+        
+        return {"status": "success", "new_label": next_label}
+    except Exception as e:
+        logger.exception("Failed to continue story")
+        raise HTTPException(status_code=502, detail=f"Story continuation failed: {str(e)}")
+
 @app.post("/games/{game_id}/sessions/{session_id}/edit")
 async def edit_game(game_id: str, session_id: str, req: EditRequest):
     p = get_game_path(game_id, "phase1.narrat")
