@@ -429,8 +429,38 @@ async def process_current_step(game_id: str, state: SessionState, parser: Narrat
 
 @app.post("/games/{game_id}/sessions/{session_id}/generate")
 async def generate_label(game_id: str, session_id: str, req: GenerateRequest):
-    # (Existing AI generation logic)
-    return {"status": "success"}
+    """Generates a new Narrat label using AI when a jump target is missing."""
+    state = load_session(game_id, session_id)
+    meta = load_metadata(game_id)
+    
+    # Build context from dialogue log
+    context_lines = [f"{d['character']}: {d['text']}" for d in state.dialogue_log[-20:]]
+    context_str = "\n".join(context_lines)
+    
+    prompt = prompts.GENERATE_STORY_PROMPT.format(
+        context=context_str,
+        metadata=meta.model_dump_json(indent=2) if meta else "No metadata",
+        target_label=req.target
+    )
+    
+    try:
+        logger.info(f"Generating story continuation for label: {req.target}")
+        new_content = call_llm(prompt, game_id=game_id)
+        
+        # Clean up markdown
+        new_content = re.sub(r'^```narrat\s*\n?', '', new_content, flags=re.MULTILINE)
+        new_content = re.sub(r'\n?```$', '', new_content, flags=re.MULTILINE)
+        
+        # Append to the script file
+        p = get_game_path(game_id, "phase1.narrat")
+        with open(p, "a") as f:
+            f.write(f"\n\n{new_content}\n")
+            
+        logger.info(f"Successfully appended AI content for label {req.target}")
+        return {"status": "success"}
+    except Exception as e:
+        logger.exception("Failed to generate story continuation")
+        raise HTTPException(status_code=502, detail=f"Story generation failed: {str(e)}")
 
 @app.post("/games/{game_id}/sessions/{session_id}/edit")
 async def edit_game(game_id: str, session_id: str, req: EditRequest):
@@ -457,6 +487,35 @@ async def edit_game(game_id: str, session_id: str, req: EditRequest):
         meta = load_metadata(game_id)
         if meta: setattr(meta, req.target, req.content); save_metadata(game_id, meta)
     return {"status": "success"}
+
+@app.post("/games/{game_id}/regenerate")
+async def regenerate_metadata(game_id: str, req: CreateGameRequest):
+    """Regenerates or refines game metadata using AI based on a new instruction."""
+    current_meta = load_metadata(game_id)
+    if not current_meta: raise HTTPException(status_code=404, detail="Game not found")
+    
+    prompt = prompts.REGENERATE_METADATA_PROMPT.format(
+        user_prompt=req.prompt or "Refine the existing metadata.",
+        current_metadata=current_meta.model_dump_json(indent=2)
+    )
+    
+    try:
+        raw = call_llm(prompt, game_id=game_id)
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if match:
+            new_meta_data = json.loads(match.group(0))
+            # Merge with existing prefix if it wasn't in AI output
+            if "prompt_prefix" not in new_meta_data:
+                new_meta_data["prompt_prefix"] = current_meta.prompt_prefix
+            
+            new_meta = GameMetadata(**new_meta_data)
+            save_metadata(game_id, new_meta)
+            return {"status": "success", "metadata": new_meta}
+        else:
+            raise HTTPException(status_code=500, detail="AI returned invalid format")
+    except Exception as e:
+        logger.exception("Metadata regeneration failed")
+        raise HTTPException(status_code=502, detail=f"Regeneration failed: {str(e)}")
 
 @app.get("/games/{game_id}/assets/{category}")
 async def list_assets(game_id: str, category: str):
