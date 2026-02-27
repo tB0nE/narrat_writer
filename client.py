@@ -384,7 +384,16 @@ class GameEngine:
         self.data = res.json()
         while True:
             self.display_game()
-            if self.data["type"] == "end": break
+            
+            if self.data["type"] == "end":
+                cmd = Prompt.ask("\n[bold red]End of Script.[/bold red] [R]estart | E[X]it", choices=["R", "r", "X", "x"])
+                if cmd.upper() == "R":
+                    res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
+                    self.data = res.json()
+                    continue
+                else:
+                    break
+
             if self.data["type"] == "missing_label":
                 if Prompt.ask("\nGenerate with AI? (Y/N)", choices=["Y", "N", "y", "n"]).upper() == "Y":
                     with console.status("Generating..."): requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/generate", json={"target": self.data["meta"]["target"]})
