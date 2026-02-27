@@ -32,7 +32,7 @@ class GameMetadata(BaseModel):
     summary: str
     genre: str
     characters: List[str] = []
-    starting_point: str = "start"
+    starting_point: str = "main"
     plot_outline: Optional[str] = None
     prompt_prefix: Optional[str] = None
 
@@ -43,7 +43,7 @@ class CreateGameRequest(BaseModel):
 
 class SessionState(BaseModel):
     session_id: str
-    current_label: str = "start"
+    current_label: str = "main"
     line_index: int = 0
     variables: Dict[str, Any] = {}
     history: List[Dict[str, Any]] = []
@@ -105,7 +105,7 @@ def call_llm(prompt: str, retries: int = 3, game_id: str = None) -> str:
 
     if config.get("api_key") == "YOUR_API_KEY_HERE":
         logger.warning("API Key not configured. Returning fallback data.")
-        return '{"title": "Unconfigured Game", "summary": "Please set your API key in config.json", "genre": "System", "characters": [], "starting_point": "start", "plot_outline": ""}'
+        return '{"title": "Unconfigured Game", "summary": "Please set your API key in config.json", "genre": "System", "characters": [], "starting_point": "main", "plot_outline": ""}'
 
     headers = {"Authorization": f"Bearer {config['api_key']}", "Content-Type": "application/json"}
     payload = {"model": config["model"], "messages": [{"role": "user", "content": final_prompt}]}
@@ -169,19 +169,30 @@ class NarratParser:
         if not os.path.exists(self.filepath): return
         with open(self.filepath, "r") as f:
             lines = f.readlines()
+        self.labels = {}
         current_label = None
         label_content = []
         for i, line in enumerate(lines):
             stripped = line.strip()
             if not stripped: continue
-            label_match = re.match(r"^label\s+([\w_]+):", stripped)
+            
+            # Labels MUST start at the beginning of the line (no indentation)
+            # and must not be reserved keywords like choice: or talk:
+            label_match = re.match(r"^(?:label\s+)?([\w_]+):\s*(?://.*)?$", line.rstrip())
+            if label_match and label_match.group(1) in ["choice", "if", "talk", "set", "jump", "background", "scene"]:
+                label_match = None
+
             if label_match:
-                if current_label: self.labels[current_label] = label_content
+                if current_label: 
+                    self.labels[current_label] = label_content
+                    logger.info(f"Parsed label '{current_label}' with {len(label_content)} lines.")
                 current_label = label_match.group(1)
                 label_content = []
                 continue
             if current_label: label_content.append((i, line.rstrip()))
-        if current_label: self.labels[current_label] = label_content
+        if current_label: 
+            self.labels[current_label] = label_content
+            logger.info(f"Parsed label '{current_label}' with {len(label_content)} lines.")
 
     def get_line(self, label: str, index: int):
         if label not in self.labels: return None
@@ -197,7 +208,7 @@ def load_session(game_id: str, session_id: str) -> SessionState:
             data = json.load(f)
             return SessionState(**data)
     meta = load_metadata(game_id)
-    return SessionState(session_id=session_id, current_label=meta.starting_point if meta else "start")
+    return SessionState(session_id=session_id, current_label=meta.starting_point if meta else "main")
 
 def save_session(game_id: str, state: SessionState):
     path = get_game_path(game_id, "saves")
@@ -317,7 +328,7 @@ async def create_game(req: CreateGameRequest):
         initial_script = re.sub(r'\n?```$', '', initial_script, flags=re.MULTILINE)
     except:
         logger.warning("Failed to generate AI script, falling back to simple template.")
-        initial_script = f"label {meta.starting_point}:\n    talk narrator \"Welcome to {meta.title}.\"\n    choice:\n        label: \"Explore\" -> explore_start\n\nlabel explore_start:\n    talk narrator \"Exploration.\"\n    -> {meta.starting_point}\n"
+        initial_script = f"{meta.starting_point}:\n    talk narrator \"Welcome to {meta.title}.\"\n    choice:\n        \"Explore\":\n            jump explore_start\n\nexplore_start:\n    talk narrator \"Exploration.\"\n    jump {meta.starting_point}\n"
 
     with open(os.path.join(game_dir, "phase1.narrat"), "w") as f:
         f.write(initial_script)
@@ -363,6 +374,12 @@ async def process_current_step(game_id: str, state: SessionState, parser: Narrat
     while True:
         line_data = parser.get_line(state.current_label, state.line_index)
         if line_data is None:
+            # If line 0 is missing, it's a jump to a missing label -> Trigger AI flow
+            if state.line_index == 0:
+                logger.warning(f"Label '{state.current_label}' is missing! Triggering AI request flow.")
+                return DialogueResponse(type="missing_label", meta={"target": state.current_label}, text=f"Label '{state.current_label}' is missing.", variables=state.variables, dialogue_log=state.dialogue_log)
+            
+            logger.info(f"End of label '{state.current_label}' reached at index {state.line_index}.")
             return DialogueResponse(type="end", text="End.", current_label=state.current_label, line_index=state.line_index, variables=state.variables, dialogue_log=state.dialogue_log)
         
         global_idx, line_text = line_data
@@ -381,8 +398,12 @@ async def process_current_step(game_id: str, state: SessionState, parser: Narrat
             # Save to history BEFORE returning
             state.history.append(json.loads(state.model_dump_json()))
             save_session(game_id, state)
+            
+            # Fetch the most up-to-date background/scene after potential changes in the loop
+            latest_bg = state.variables.get("__current_bg", "None")
+            
             meta = {"profile": get_reference(game_id, "characters", char, "profile"), "description": get_reference(game_id, "characters", char, "description"), "placeholder": get_reference(game_id, "characters", char, "idle"), "emotion": state.variables.get(f"__emo_{char}", "Neutral")}
-            return DialogueResponse(type="talk", character=char, text=text, meta=meta, current_label=state.current_label, line_index=state.line_index, background=current_bg, background_desc=get_reference(game_id, "backgrounds", current_bg) if current_bg != "None" else "", variables=state.variables, dialogue_log=state.dialogue_log)
+            return DialogueResponse(type="talk", character=char, text=text, meta=meta, current_label=state.current_label, line_index=state.line_index, background=latest_bg, background_desc=get_reference(game_id, "backgrounds", latest_bg) if latest_bg != "None" else "", variables=state.variables, dialogue_log=state.dialogue_log)
 
         if re.match(r'background\s+([\w_]+)', stripped):
             state.variables["__current_bg"] = re.match(r'background\s+([\w_]+)', stripped).group(1)
@@ -392,26 +413,83 @@ async def process_current_step(game_id: str, state: SessionState, parser: Narrat
             continue
         if re.match(r'set_expression\s+([\w_]+)\s+([\w_]+)', stripped):
             m = re.match(r'set_expression\s+([\w_]+)\s+([\w_]+)', stripped)
-            state.variables[f"__emo_{m.group(1)}"] = m.group(2)
+            char, emo = m.group(1), m.group(2)
+            state.variables[f"__emo_{char}"] = emo
+            # Track for UI
+            if "__updated_vars" not in state.variables: state.variables["__updated_vars"] = []
+            var_name = f"{char}_emotion"
+            if var_name not in state.variables["__updated_vars"]: state.variables["__updated_vars"].append(var_name)
+            state.variables[var_name] = emo
             continue
         if re.match(r'set\s+([\w_]+)\s+(.*)', stripped):
             m = re.match(r'set\s+([\w_]+)\s+(.*)', stripped)
             var, val = m.group(1), m.group(2).strip()
             state.variables[var] = int(val) if val.isdigit() else val
+            # Track for UI
+            if "__updated_vars" not in state.variables: state.variables["__updated_vars"] = []
+            if var not in state.variables["__updated_vars"]: state.variables["__updated_vars"].append(var)
+            if len(state.variables["__updated_vars"]) > 5: state.variables["__updated_vars"].pop(0)
             continue
-        if re.match(r'^->\s+([\w_]+)', stripped):
-            state.current_label, state.line_index = re.match(r'^->\s+([\w_]+)', stripped).group(1), 0
+        if re.match(r'^jump\s+([\w_]+)', stripped) or re.match(r'^->\s+([\w_]+)', stripped):
+            target = re.match(r'^(?:jump|->)\s+([\w_]+)', stripped).group(1)
+            state.current_label, state.line_index = target, 0
             continue
         if stripped == "choice:":
+            logger.info(f"Entering choice block at label '{state.current_label}' index {state.line_index}")
             options, opt_idx, temp_idx = {}, 1, state.line_index
             while True:
                 next_data = parser.get_line(state.current_label, temp_idx)
-                if not next_data: break
-                opt_match = re.search(r'label:\s+"(.*)"\s+->\s+([\w_]+)', next_data[1])
+                if not next_data: 
+                    logger.info("No more lines found in label for choice.")
+                    break
+                
+                line_content = next_data[1].strip()
+                logger.info(f"Checking line {temp_idx}: '{next_data[1]}'")
+                if not line_content: 
+                    temp_idx += 1
+                    continue
+                
+                # Match standard Narrat option: "Text":
+                opt_match = re.match(r'^\s*"(.*)":$', next_data[1])
+                
                 if opt_match:
-                    options[opt_idx] = {"text": opt_match.group(1), "target": opt_match.group(2)}
-                    opt_idx, temp_idx = opt_idx + 1, temp_idx + 1
-                else: break
+                    text = opt_match.group(1)
+                    logger.info(f"Found option: {text}")
+                    # Scan for a jump in subsequent lines belonging to this option
+                    found_jump = False
+                    search_idx = temp_idx + 1
+                    while True:
+                        jump_data = parser.get_line(state.current_label, search_idx)
+                        if not jump_data: break
+                        
+                        jump_content = jump_data[1].strip()
+                        if not jump_content: 
+                            search_idx += 1
+                            continue
+                            
+                        # If we hit another option, we stop searching for a jump
+                        if re.match(r'^\s*"(.*)":$', jump_data[1]): 
+                            logger.info(f"Hit next option at {search_idx} while searching for jump.")
+                            break
+                        
+                        # Match 'jump label_name' or '-> label_name'
+                        jump_match = re.search(r'(?:jump|->)\s+([\w_]+)', jump_content)
+                        if jump_match:
+                            target_label = jump_match.group(1)
+                            logger.info(f"Found jump to {target_label} for option {text}")
+                            options[opt_idx] = {"text": text, "target": target_label}
+                            opt_idx += 1
+                            found_jump = True
+                            break
+                        search_idx += 1
+                    
+                    if found_jump:
+                        temp_idx = search_idx + 1 # Continue after the jump we found
+                        continue
+                
+                logger.info(f"Line {temp_idx} did not match an option or was already processed.")
+                break
+            
             if command and command.strip().isdigit():
                 idx = int(command.strip())
                 if idx in options:

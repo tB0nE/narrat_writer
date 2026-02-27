@@ -302,7 +302,8 @@ class GameEngine:
         except: return Panel("Script file not found.", title="Script Viewer", border_style="red")
         curr_label, target_line_idx = self.data.get("current_label", ""), -1
         for i, line in enumerate(lines):
-            if line.strip().startswith(f"label {curr_label}:"):
+            # Support both 'label name:' and 'name:'
+            if re.match(rf"^(?:label\s+)?{curr_label}:\s*(?://.*)?$", line.strip()):
                 target_line_idx = i + self.data.get("line_index", 0)
                 break
         h = console.height - 8
@@ -353,7 +354,7 @@ class GameEngine:
         with open(p, "r") as f: lines = f.readlines()
         idx = -1
         for i, line in enumerate(lines):
-            if line.strip().startswith(f"label {self.data['current_label']}:"):
+            if re.match(rf"^(?:label\s+)?{self.data['current_label']}:\s*(?://.*)?$", line.strip()):
                 idx = i + self.data.get("line_index", 0)
                 break
         if idx == -1: return
