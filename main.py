@@ -514,6 +514,64 @@ async def process_current_step(game_id: str, state: SessionState, parser: Narrat
             continue
     return DialogueResponse(type="end", text="End.")
 
+@app.post("/games/{game_id}/characters/rename")
+async def rename_character(game_id: str, req: Dict[str, str]):
+    """
+    Globally renames a character in metadata, script, and reference files.
+    req should contain 'old_id' and 'new_id'.
+    """
+    old_id = req.get("old_id")
+    new_id = req.get("new_id")
+    if not old_id or not new_id:
+        raise HTTPException(status_code=400, detail="Missing old_id or new_id")
+
+    meta = load_metadata(game_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    # 1. Update Metadata
+    if old_id in meta.characters:
+        meta.characters = [new_id if c == old_id else c for c in meta.characters]
+        save_metadata(game_id, meta)
+        logger.info(f"Updated metadata characters: {old_id} -> {new_id}")
+
+    # 2. Update Script File (phase1.narrat)
+    p = get_game_path(game_id, "phase1.narrat")
+    if os.path.exists(p):
+        with open(p, "r") as f:
+            content = f.read()
+        
+        # Replace 'talk old_id ' or 'talk old_id\n' (but not as part of another word)
+        content = re.sub(rf'(\btalk\s+){old_id}(\b)', f'\\1{new_id}\\2', content)
+        # Replace 'set_expression old_id '
+        content = re.sub(rf'(\bset_expression\s+){old_id}(\b)', f'\\1{new_id}\\2', content)
+        
+        with open(p, "w") as f:
+            f.write(content)
+        logger.info(f"Updated script file with new character ID: {new_id}")
+
+    # 3. Rename Reference Assets
+    old_ref_path = get_game_path(game_id, "reference", "characters", old_id)
+    new_ref_path = get_game_path(game_id, "reference", "characters", new_id)
+    
+    if os.path.exists(old_ref_path):
+        # Rename the folder
+        if os.path.exists(new_ref_path):
+            shutil.rmtree(new_ref_path) # Overwrite if exists? Or merge? safer to just move
+        os.rename(old_ref_path, new_ref_path)
+        
+        # Rename files inside the folder if they follow the pattern old_id_type.txt
+        for filename in os.listdir(new_ref_path):
+            if filename.startswith(f"{old_id}_"):
+                new_filename = filename.replace(f"{old_id}_", f"{new_id}_", 1)
+                os.rename(
+                    os.path.join(new_ref_path, filename),
+                    os.path.join(new_ref_path, new_filename)
+                )
+        logger.info(f"Renamed reference assets from {old_id} to {new_id}")
+
+    return {"status": "success", "old_id": old_id, "new_id": new_id}
+
 @app.post("/games/{game_id}/sessions/{session_id}/generate")
 async def generate_label(game_id: str, session_id: str, req: GenerateRequest):
     """Generates a new Narrat label using AI when a jump target is missing."""

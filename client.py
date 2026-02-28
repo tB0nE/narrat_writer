@@ -434,12 +434,24 @@ class GameEngine:
                 console.print("[red]No character active.[/red]")
                 Prompt.ask("[Enter] to continue")
                 return
-            p = Prompt.ask("  [1] Desc | [2] Profile | [G]enerate All", choices=["1", "2", "G", "g"])
+            p = Prompt.ask("  [1] Desc | [2] Profile | [G]enerate All | [R]ename Globally", choices=["1", "2", "G", "g", "R", "r"])
             if p.upper() == "G":
                 with console.status(f"[bold green]AI is describing {char}...[/bold green]"):
                     requests.post(f"{BASE_URL}/games/{self.game_id}/assets/generate", json={"category": "characters", "target": char, "sub_type": "description"})
                     requests.post(f"{BASE_URL}/games/{self.game_id}/assets/generate", json={"category": "characters", "target": char, "sub_type": "profile"})
                 console.print(f"[green]AI described {char}![/green]")
+            elif p.upper() == "R":
+                new_name = Prompt.ask(f"Enter new global ID for {char} (no spaces)")
+                if new_name:
+                    with console.status(f"[bold yellow]Refactoring {char} to {new_name}...[/bold yellow]"):
+                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/characters/rename", json={"old_id": char, "new_id": new_name})
+                    if res.status_code == 200:
+                        console.print(f"[green]Successfully renamed {char} to {new_name} across all files![/green]")
+                        # Need to refresh local data since character ID changed
+                        self.data["character"] = new_name
+                    else:
+                        console.print(f"[red]Rename failed: {res.json().get('detail')}[/red]")
+                Prompt.ask("[Enter] to continue")
             else:
                 suffix = "description" if p == "1" else "profile"
                 nd = Prompt.ask(f"  New {suffix} for {char}")
