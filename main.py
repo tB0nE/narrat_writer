@@ -176,23 +176,24 @@ class NarratParser:
             stripped = line.strip()
             if not stripped: continue
             
-            # Labels MUST start at the beginning of the line (no indentation)
-            # and must not be reserved keywords like choice: or talk:
+            # Match labels: 'label name:' or just 'name:' at the VERY START of the line
+            # We exclude common keywords that might end in a colon
             label_match = re.match(r"^(?:label\s+)?([\w_]+):\s*(?://.*)?$", line.rstrip())
-            if label_match and label_match.group(1) in ["choice", "if", "talk", "set", "jump", "background", "scene"]:
-                label_match = None
+            if label_match:
+                lbl_name = label_match.group(1)
+                if lbl_name in ["choice", "if", "talk", "set", "jump", "background", "scene", "play", "stop"]:
+                    label_match = None
 
             if label_match:
                 if current_label: 
                     self.labels[current_label] = label_content
-                    logger.info(f"Parsed label '{current_label}' with {len(label_content)} lines.")
                 current_label = label_match.group(1)
                 label_content = []
                 continue
             if current_label: label_content.append((i, line.rstrip()))
         if current_label: 
             self.labels[current_label] = label_content
-            logger.info(f"Parsed label '{current_label}' with {len(label_content)} lines.")
+        logger.info(f"Parsed {len(self.labels)} labels from {self.filepath}")
 
     def get_line(self, label: str, index: int):
         if label not in self.labels: return None
@@ -554,8 +555,10 @@ async def continue_story(game_id: str, session_id: str):
     state = load_session(game_id, session_id)
     meta = load_metadata(game_id)
     
-    # Create a new label name
-    next_label = f"{state.current_label}_cont"
+    # Create a unique new label name
+    import time
+    unique_suffix = hex(int(time.time()))[2:]
+    next_label = f"cont_{unique_suffix}"
     
     # Build context
     context_lines = [f"{d['character']}: {d['text']}" for d in state.dialogue_log[-20:]]

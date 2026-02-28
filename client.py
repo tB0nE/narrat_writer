@@ -333,16 +333,32 @@ class GameEngine:
                 target_line_idx = i
                 current_logical += 1
         
-        h = console.height - 8
-        # Ensure target_line_idx is valid for display
-        display_idx = max(0, target_line_idx)
-        start, end = max(0, display_idx - (h // 2)), min(len(lines), display_idx + h // 2)
+        # 3. Calculate display range (Centered)
+        h = console.height - 10 # Allow room for title and padding
+        half_h = h // 2
+        
+        display_idx = target_line_idx if target_line_idx != -1 else label_file_idx
+        
+        start = max(0, display_idx - half_h)
+        end = min(len(lines), start + h)
+        
+        # Adjust start if we hit the end of the file
+        if end == len(lines):
+            start = max(0, end - h)
+        
         table = Table(show_header=False, box=None, padding=(0, 1), collapse_padding=True)
         table.add_column("num", justify="right", style="dim cyan", width=4)
         table.add_column("content")
+        
         for i in range(start, end):
-            if i == target_line_idx: table.add_row(f"[bold cyan]{i+1}[/bold cyan]", Text(f"> {lines[i].rstrip()}", style="bold white on grey15"))
-            else: table.add_row(str(i+1), lines[i].rstrip())
+            # Highlight the line we are currently on
+            if i == target_line_idx:
+                table.add_row(f"[bold cyan]{i+1}[/bold cyan]", Text(f"> {lines[i].rstrip()}", style="bold white on grey15"))
+            elif i == label_file_idx and target_line_idx == label_file_idx: # Special highlight for label if index 0
+                table.add_row(f"[bold cyan]{i+1}[/bold cyan]", Text(f"> {lines[i].rstrip()}", style="bold yellow on grey15"))
+            else:
+                table.add_row(str(i+1), lines[i].rstrip())
+        
         return Panel(table, title=f"Script: {self.game_id}/phase1.narrat", border_style="white", padding=(1, 1))
 
     def display_game(self):
