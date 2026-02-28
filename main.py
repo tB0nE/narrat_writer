@@ -535,13 +535,14 @@ async def generate_label(game_id: str, session_id: str, req: GenerateRequest):
         new_content = call_llm(prompt, game_id=game_id)
         
         # Clean up markdown
-        new_content = re.sub(r'^```narrat\s*\n?', '', new_content, flags=re.MULTILINE)
+        new_content = re.sub(r'^```[\w]*\s*\n?', '', new_content, flags=re.MULTILINE)
         new_content = re.sub(r'\n?```$', '', new_content, flags=re.MULTILINE)
         
         # Append to the script file
         p = get_game_path(game_id, "phase1.narrat")
         with open(p, "a") as f:
-            f.write(f"\n\n{new_content}\n")
+            # Add a clear comment and the new content
+            f.write(f"\n\n// AI Generated Label: {req.target}\n{req.target}:\n{new_content}\n")
             
         logger.info(f"Successfully appended AI content for label {req.target}")
         return {"status": "success"}
@@ -577,12 +578,11 @@ async def continue_story(game_id: str, session_id: str):
         new_content = re.sub(r'^```[\w]*\s*\n?', '', new_content, flags=re.MULTILINE)
         new_content = re.sub(r'\n?```$', '', new_content, flags=re.MULTILINE)
         
-        # Append jump to the old label and then the new label content
+        # Append jump to the old label AND THEN the new label content
         p = get_game_path(game_id, "phase1.narrat")
         with open(p, "a") as f:
-            # We need to find where the old label ended and add a jump
-            # For simplicity in this headless engine, we just append it
-            f.write(f"\n\n// Story continued via AI\n{next_label}:\n{new_content}\n")
+            # We add a jump line to the end of the script to connect the current label to the new one
+            f.write(f"\n    jump {next_label}\n\n{next_label}:\n{new_content}\n")
             
         # Update the session to point to the new label
         state.current_label = next_label
