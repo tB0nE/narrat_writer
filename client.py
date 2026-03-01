@@ -56,22 +56,25 @@ class Launcher:
         input_obj = create_input()
         
         with Live(make_layout_func(options, idx), auto_refresh=False, screen=True) as live:
-            while True:
-                live.update(make_layout_func(options, idx))
-                live.refresh()
-                
-                with input_obj.raw_mode():
+            with input_obj.raw_mode():
+                while True:
+                    live.update(make_layout_func(options, idx))
+                    live.refresh()
+                    
                     keys = input_obj.read_keys()
-                
-                for key in keys:
-                    if key.key == Keys.Up:
-                        idx = (idx - 1) % len(options)
-                    elif key.key == Keys.Down:
-                        idx = (idx + 1) % len(options)
-                    elif key.key == Keys.Enter:
-                        return options[idx]
-                    elif key.key == Keys.ControlC:
-                        sys.exit()
+                    if not keys:
+                        time.sleep(0.05)
+                        continue
+
+                    for key in keys:
+                        if key.key == Keys.Up:
+                            idx = (idx - 1) % len(options)
+                        elif key.key == Keys.Down:
+                            idx = (idx + 1) % len(options)
+                        elif key.key == Keys.Enter or key.key == Keys.ControlM:
+                            return options[idx]
+                        elif key.key == Keys.ControlC:
+                            sys.exit()
 
     def make_intro_layout(self) -> Layout:
         layout = Layout()
@@ -673,16 +676,19 @@ class GameEngine:
         
         while True:
             with Live(self.display_game(), auto_refresh=False, screen=True) as live:
-                cmd = None
-                while cmd is None:
-                    live.update(self.display_game())
-                    live.refresh()
-                    
-                    with input_obj.raw_mode():
+                with input_obj.raw_mode():
+                    cmd = None
+                    while cmd is None:
+                        live.update(self.display_game())
+                        live.refresh()
+                        
                         keys = input_obj.read_keys()
-                    
-                    for key in keys:
-                        if key.key == Keys.Tab:
+                        if not keys:
+                            time.sleep(0.05)
+                            continue
+
+                        for key in keys:
+                            if key.key == Keys.Tab:
                             if self.data.get("type") == "choice":
                                 self.focus = "actions" if self.focus == "choices" else "choices"
                             else:
@@ -708,7 +714,7 @@ class GameEngine:
                                 if options_count:
                                     self.choice_idx = (self.choice_idx + 1) % options_count
                         
-                        elif key.key == Keys.Enter:
+                        elif key.key == Keys.Enter or key.key == Keys.ControlM:
                             if self.focus == "choices":
                                 opt_keys = list(self.data["options"].keys())
                                 cmd = opt_keys[self.choice_idx]
