@@ -98,14 +98,20 @@ class Launcher:
    ██████████████████████████████████    
      ██████████████████████████████      
          ██████████████████████          
-[/red][bold white]
-  _ _ _ ____ ___ ___ ____ ____ 
-  | | | |__/  |   |  |___ |__/ 
-  |_|_| |  \ _|_  |  |___ |  \ 
-[/bold white]
+         ██████████████████████          
+          █        ██        █           
+          ████████████████████           
+           ██████████████████            
+            ████████████████             
+          ██ ██████████████ ██           
+              ████████████               
+               ███    ███                
+             ██  ██  ██  ██              
+                  ████                   
+[/red]
         """
         description = """
-[bold white]Welcome to Narrat Writer[/bold white]
+[bold white]Narrat Writer[/bold white]
 
 A CLI-based development environment for writing and playing visual novels. 
 Experience immersive storytelling, dynamic AI generation, and real-time script editing.
