@@ -87,29 +87,30 @@ class Launcher:
     def display_intro(self, options=None, selected_idx=0) -> Layout:
         layout = self.make_intro_layout()
         
-        logo = r"""
-[red]
-      ███████              ███████       
-    ████████████        ████████████     
-   ██████████████      ██████████████    
-  ████████████████████████████████████   
-  ████████████████████████████████████   
-  ████████████████████████████████████   
-   ██████████████████████████████████    
-     ██████████████████████████████      
-         ██████████████████████          
-         ██████████████████████          
-          █        ██        █           
-          ████████████████████           
-           ██████████████████            
-            ████████████████             
-          ██ ██████████████ ██           
-              ████████████               
-               ███    ███                
-             ██  ██  ██  ██              
-                  ████                   
-[/red]
-        """
+        # Center each line of the ASCII logo individually for perfect alignment
+        logo_raw = [
+            "      ███████              ███████       ",
+            "    ████████████        ████████████     ",
+            "   ██████████████      ██████████████    ",
+            "  ████████████████████████████████████   ",
+            "  ████████████████████████████████████   ",
+            "  ████████████████████████████████████   ",
+            "   ██████████████████████████████████    ",
+            "     ██████████████████████████████      ",
+            "         ██████████████████████          ",
+            "         ██████████████████████          ",
+            "          █        ██        █           ",
+            "          ████████████████████           ",
+            "           ██████████████████            ",
+            "            ████████████████             ",
+            "          ██ ██████████████ ██           ",
+            "              ████████████               ",
+            "               ███    ███                ",
+            "             ██  ██  ██  ██              ",
+            "                  ████                   "
+        ]
+        logo_formatted = "\n".join([f"[red]{line}[/red]" for line in logo_raw])
+        
         description = """
 [bold white]Narrat Writer[/bold white]
 
@@ -119,7 +120,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
 [dim]Version 0.2.0[/dim]
         """
         
-        layout["left"].update(Panel(Align.center(logo + description, vertical="middle"), border_style="cyan"))
+        layout["left"].update(Panel(Align.center(logo_formatted + description, vertical="middle"), border_style="cyan"))
         
         menu_text = ""
         if options:
