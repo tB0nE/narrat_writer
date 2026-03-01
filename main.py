@@ -542,32 +542,13 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
     def apply_smart_rename(text, old, new):
         if not text: return text
         
-        # Performance: Only run if the old string exists in some form
-        if old.lower() not in text.lower():
-            return text
-
-        # Pass 1: exact match
-        text = re.sub(rf'\b{re.escape(old)}\b', new, text)
-        
-        # Pass 2: capitalized version (Sara -> Sarah)
-        old_cap = old.capitalize()
-        new_cap = new.capitalize()
-        if old_cap != old:
-            text = re.sub(rf'\b{re.escape(old_cap)}\b', new_cap, text)
+        def preserve_case(match):
+            m = match.group(0)
+            if m.isupper(): return new.upper()
+            if m.istitle(): return new.capitalize()
+            return new.lower()
             
-        # Pass 3: lowercase version (sara -> sarah)
-        old_low = old.lower()
-        new_low = new.lower()
-        if old_low != old:
-            text = re.sub(rf'\b{re.escape(old_low)}\b', new_low, text)
-            
-        # Pass 4: uppercase version (SARA -> SARAH)
-        old_up = old.upper()
-        new_up = new.upper()
-        if old_up != old:
-            text = re.sub(rf'\b{re.escape(old_up)}\b', new_up, text)
-            
-        return text
+        return re.sub(rf'\b{re.escape(old)}\b', preserve_case, text, flags=re.IGNORECASE)
 
     meta_changed = False
     logger.info(f"--- GLOBAL REFACTOR START: {old_id} -> {new_id} ---")
