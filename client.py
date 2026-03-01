@@ -103,7 +103,7 @@ class Launcher:
 A CLI-based development environment for writing and playing visual novels. 
 Experience immersive storytelling, dynamic AI generation, and real-time script editing.
 
-[dim]Version 1.2.0[/dim]
+[dim]Version 0.2.0[/dim]
         """
         
         layout["left"].update(Panel(Align.center(logo + description, vertical="middle"), border_style="cyan"))

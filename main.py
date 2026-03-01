@@ -20,7 +20,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("narrat_api")
 
-app = FastAPI(title="Headless Narrat API")
+app = FastAPI(title="Headless Narrat API", version="0.2.0")
 
 # --- CONFIGURATION ---
 GAMES_DIR = os.getenv("GARRAT_GAMES_DIR", "games")
