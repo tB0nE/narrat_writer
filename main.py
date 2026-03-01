@@ -553,6 +553,11 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
             # Match 'scene old_id'
             content = re.sub(rf'(\bscene\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
         
+        # General label rename (if any matches)
+        content = re.sub(rf'^(\s*){old_id}:', f'\\1{new_id}:', content, flags=re.MULTILINE | re.IGNORECASE)
+        # General jump rename
+        content = re.sub(rf'(\bjump\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
+        
         with open(p, "w") as f:
             f.write(content)
         logger.info(f"Refactored script: {old_id} -> {new_id} (Category: {category})")
