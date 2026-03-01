@@ -531,10 +531,22 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
     if not meta:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    # 1. Update Metadata (if character)
-    if category == "characters" and old_id in meta.characters:
-        meta.characters = [new_id if c == old_id else c for c in meta.characters]
-        save_metadata(game_id, meta)
+    # 1. Update Metadata
+    if category == "characters":
+        # Find index case-insensitively
+        new_char_list = []
+        found = False
+        for c in meta.characters:
+            if c.lower() == old_id.lower():
+                new_char_list.append(new_id)
+                found = True
+            else:
+                new_char_list.append(c)
+        
+        if found:
+            meta.characters = new_char_list
+            save_metadata(game_id, meta)
+            logger.info(f"Updated metadata character list: {old_id} -> {new_id}")
 
     # 2. Update Script File (phase1.narrat) - Case Insensitive Refactor
     p = get_game_path(game_id, "phase1.narrat")
@@ -543,24 +555,26 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
             content = f.read()
         
         if category == "characters":
-            # Match 'talk old_id' or 'set_expression old_id' (Case Insensitive)
+            # Match technical commands: 'talk old_id' or 'set_expression old_id'
             content = re.sub(rf'(\btalk\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
             content = re.sub(rf'(\bset_expression\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
+            # Match spoken instances in dialogue: "Hello old_id!" -> "Hello new_id!"
+            # We look for the ID when it's NOT followed by a colon (which would be a technical label)
+            # and is inside quotes or at word boundaries.
+            content = re.sub(rf'(\b){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
         elif category == "backgrounds":
-            # Match 'background old_id'
             content = re.sub(rf'(\bbackground\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
+            content = re.sub(rf'(\b){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
         elif category == "scenes":
-            # Match 'scene old_id'
             content = re.sub(rf'(\bscene\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
+            content = re.sub(rf'(\b){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
         
-        # General label rename (if any matches)
+        # Ensure label definitions are also renamed
         content = re.sub(rf'^(\s*){old_id}:', f'\\1{new_id}:', content, flags=re.MULTILINE | re.IGNORECASE)
-        # General jump rename
-        content = re.sub(rf'(\bjump\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
         
         with open(p, "w") as f:
             f.write(content)
-        logger.info(f"Refactored script: {old_id} -> {new_id} (Category: {category})")
+        logger.info(f"Refactored script content: {old_id} -> {new_id}")
 
     # 3. Rename Reference Assets
     old_ref_dir = get_game_path(game_id, "reference", category)
