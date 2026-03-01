@@ -77,6 +77,24 @@ Example:
             jump rebellion
 """
 
+SCRIPT_ASSISTANT_PROMPT = """You are a Narrat script editor.
+Rewrite the following line of Narrat script according to the user's instruction.
+
+Metadata:
+{metadata}
+
+Original Line:
+{old_line}
+
+User Instruction:
+{instruction}
+
+RULES:
+- Preserve the Narrat command type (e.g. if it's 'talk', keep it 'talk').
+- Maintain the correct indentation.
+- Do NOT add markdown formatting.
+- Return ONLY the updated line."""
+
 REGENERATE_METADATA_PROMPT = """Update the following visual novel metadata based on this request: {user_prompt}
 Current Metadata: {current_metadata}
 Return ONLY JSON in the same format."""

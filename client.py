@@ -764,9 +764,48 @@ class GameEngine:
                 nd = questionary.text(f"  New profile for {char}").ask()
                 requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "reference", "action": "update", "sub_category": "character", "target": char, "content": nd, "meta": {"type": "profile"}})
         elif edit_type == "Dialogue":
-            new_text = questionary.text("  New Text").ask()
-            if new_text:
-                requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "script", "action": "update", "target": str(idx), "content": f"talk {self.data.get('character', 'narrator')} \"{new_text}\""})
+            action = questionary.select("Dialogue Action", choices=["Edit Manually", "Rewrite with AI", "Back"]).ask()
+            if action == "Edit Manually":
+                new_text = questionary.text("  New Text").ask()
+                if new_text:
+                    requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "script", "action": "update", "target": str(idx), "content": f"talk {self.data.get('character', 'narrator')} \"{new_text}\""})
+            elif action == "Rewrite with AI":
+                instr = questionary.text("How should the AI rewrite this line? (e.g. 'Make it more dramatic')").ask()
+                if instr:
+                    with console.status("[bold green]AI is rewriting...[/bold green]"):
+                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/edit/ai", json={"target": str(idx), "content": instr})
+                    if res.status_code == 200:
+                        console.print(f"[green]Rewritten: {res.json()['new_content']}[/green]")
+                        questionary.press_any_key_to_continue().ask()
+                    else:
+                        console.print(f"[red]Error: {res.json().get('detail')}[/red]")
+                        questionary.press_any_key_to_continue().ask()
+        elif edit_type == "Choice":
+            action = questionary.select("Choice Action", choices=["Edit Manually", "Rewrite with AI", "Back"]).ask()
+            if action == "Edit Manually":
+                # Fallback to existing manual edit if needed, or implement full choice edit
+                console.print("[yellow]Manual choice editing is still being refined. Try AI Rewrite![/yellow]")
+                questionary.press_any_key_to_continue().ask()
+            elif action == "Rewrite with AI":
+                instr = questionary.text("How should the AI rewrite this entire choice block?").ask()
+                if instr:
+                    with console.status("[bold green]AI is rewriting choice...[/bold green]"):
+                        # We find the 'choice:' line index
+                        c_idx = -1
+                        with open(f"games/{self.game_id}/phase1.narrat", "r") as f: lns = f.readlines()
+                        for i in range(idx, -1, -1):
+                            if lns[i].strip() == "choice:":
+                                c_idx = i
+                                break
+                        if c_idx != -1:
+                            res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/edit/ai", json={"target": str(c_idx), "content": instr + " (Rewrite the whole choice: block)"})
+                            if res.status_code == 200:
+                                console.print("[green]Choice block rewritten![/green]")
+                            else:
+                                console.print(f"[red]Error: {res.json().get('detail')}[/red]")
+                        else:
+                            console.print("[red]Could not find start of choice block.[/red]")
+                        questionary.press_any_key_to_continue().ask()
 
     def run(self):
         res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})

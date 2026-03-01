@@ -741,6 +741,40 @@ async def edit_game(game_id: str, session_id: str, req: EditRequest):
         if meta: setattr(meta, req.target, req.content); save_metadata(game_id, meta)
     return {"status": "success"}
 
+@app.post("/games/{game_id}/sessions/{session_id}/edit/ai")
+async def ai_edit_script(game_id: str, session_id: str, req: Dict[str, str]):
+    """Surgically rewrites a script line using AI based on user instructions."""
+    line_idx = int(req.get("target"))
+    instruction = req.get("content")
+    
+    p = get_game_path(game_id, "phase1.narrat")
+    with open(p, "r") as f: lines = f.readlines()
+    
+    old_line = lines[line_idx].strip()
+    meta = load_metadata(game_id)
+    
+    prompt = prompts.SCRIPT_ASSISTANT_PROMPT.format(
+        metadata=meta.model_dump_json(indent=2) if meta else "No metadata",
+        old_line=old_line,
+        instruction=instruction
+    )
+    
+    try:
+        logger.info(f"AI Surgical Edit on line {line_idx}: '{instruction}'")
+        new_line_content = call_llm(prompt, game_id=game_id)
+        new_line_content = re.sub(r'^```[\w]*\s*\n?', '', new_line_content, flags=re.MULTILINE)
+        new_line_content = re.sub(r'\n?```$', '', new_line_content, flags=re.MULTILINE).strip()
+        
+        # Preserve original indentation
+        indent = re.match(r'^\s*', lines[line_idx]).group(0)
+        lines[line_idx] = f"{indent}{new_line_content}\n"
+        
+        with open(p, "w") as f: f.writelines(lines)
+        return {"status": "success", "new_content": new_line_content}
+    except Exception as e:
+        logger.exception("AI Surgical Edit failed")
+        raise HTTPException(status_code=502, detail=f"AI Edit failed: {str(e)}")
+
 @app.post("/games/{game_id}/regenerate")
 async def regenerate_metadata(game_id: str, req: CreateGameRequest):
     """Regenerates or refines game metadata using AI based on a new instruction."""
