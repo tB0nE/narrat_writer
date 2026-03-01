@@ -1,0 +1,71 @@
+main:
+    background obsidian_mines
+    talk narrator "The air in the lower mines is thick with dust and the copper tang of blood. Above, the Obsidian Spire pierces the smog-choked sky."
+    talk jesse "Sarah, breathe. Just keep rhythm with the pick. Don't let them see you stumble."
+    talk Sarahh "I'm trying, Jesse. But the overseer... she's watching us. I can feel her eyes."
+    talk narrator "You grip your pickaxe tighter. Under the skin of your palms, the Forbidden Spark flares hot—a dangerous secret in a world where men are property."
+    talk jesse "I won't let them take you. Not today. Not ever."
+    talk narrator "A heavy bell tolls, signaling the arrival of the Mistress. The slaves immediately freeze, bowing their heads to the floor."
+    talk vespera "Silence, worms. I smell fear... and insubordination."
+    talk vespera "Which one of you broke the extraction seal?"
+    talk narrator "You see the broken seal near Sarah's feet. It was an accident, but in the Spire, accidents are treason."
+    talk Sarahh "I... I dropped my hammer, Mistress. I am sorry!"
+    talk vespera "Sorry? Your apology is as weak as your gender's blood. Guards, seize her."
+    talk jesse "Touch her and you'll regret it!"
+    talk narrator "The guards lunge. Panic turns to rage inside you. The magic screams to be released, ready to tear the iron from their hands."
+    talk vespera "What was that, slave? Do you wish to join her in the Pits?"
+    choice:
+        "Bow your head and beg for mercy":
+            jump beg_mercy
+        "Unleash the spark":
+            jump unleash_magic
+
+beg_mercy:
+    talk jesse "Please, Mistress! It was my fault! I distracted her!"
+    talk vespera "Noble. But foolish. Take them both."
+
+unleash_magic:
+    talk jesse "I said... GET AWAY FROM HER!"
+    talk narrator "The air explodes in a violet flash. The guards are thrown back, crashing into the stone walls."
+
+// Story continued via AI
+beg_mercy_cont:
+beg_mercy_cont:
+    narrator "Rough hands seize you, dragging you across the dusty stone. The cold iron of the shackles bites into your wrists, but beneath the skin, the Forbidden Spark roars in protest."
+    Sarah "Jesse, don't fight them! Please!"
+    vespera "Take them below. Let the rats have them for a night. If they survive, perhaps they will learn their place."
+    narrator "The guards haul you toward the gaping maw of the elevator shaft. Your heart hammers against your ribs. You feel the magic surging in your veins, demanding to be unleashed. One spark is all it would take to incinerate them all."
+    choice:
+        "Unleash the magic":
+            jump magic_outburst
+        "Submit and wait":
+            jump drag_to_pits
+
+
+drag_to_pits:
+    narrator "Rough hands clamp onto your shoulders, the iron gauntlets biting into your skin. You are hauled to your feet, stumbling beside Sarah."
+    Sarah "Jesse! I'm so sorry... this is all my fault!"
+    Jesse "Stay strong, Sarah. Don't let them see you break."
+    narrator "The guards force you forward, shoving you toward the dark archway leading to the Pits. Vespera watches, her silhouette a blot against the smog."
+    vespera "Take them deep. Let the darkness have them."
+    narrator "The Forbidden Spark roars in your veins, responding to your fear. You feel the heat pooling in your palms, itching to unleash. You could strike now while their guard is down, or conserve your strength for the hell that awaits below."
+    choice:
+        "Unleash the magic and fight back":
+            jump magic_resistance
+        "Bide your time and save your strength":
+            jump descent_into_darkness
+
+
+// Story continued via AI
+beg_mercy_cont:
+beg_mercy_cont:
+    talk narrator "Rough hands seize you, dragging you away from the safety of the shadows. Your boots scrape against the stone as you struggle, but the guards' grips are like iron vices."
+    talk vespera "Take them to the Holding Cells. If they survive the night, perhaps the Pits will teach them the error of their existence."
+    talk Sarahh "Jesse! They're taking us to the deep level!"
+    talk narrator "You are hauled toward the archway, the darkness of the mines swallowing the light of the upper chamber. The Spark in your veins flares violently, reacting to your panic. The guard holding your left arm stumbles as the metal of his gauntlet begins to vibrate."
+    talk narrator "You have a split second to decide. Let the magic out and risk everything, or bide your time and face the darkness ahead."
+    choice:
+        "Suppress the magic and go quietly":
+            jump holding_cells
+        "Unleash the Spark and break free":
+            jump magic_outburst

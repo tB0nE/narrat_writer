@@ -34,7 +34,7 @@ def test_step_game_start(client, test_game):
     data = response.json()
     assert data["type"] == "talk"
     assert "Welcome" in data["text"]
-    assert data["current_label"] == "start"
+    assert data["current_label"] == "main"
 
 def test_edit_metadata(client, test_game):
     payload = {

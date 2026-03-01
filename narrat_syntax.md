@@ -1,19 +1,19 @@
 # Narrat Script Syntax Reference
 
 ## Core Structure
-- **Labels:** `label [label_name]:` (Indentation defines scope)
-- **Dialogue:** `talk [character_id] "[text]"`
+- **Labels:** `[label_name]:` (Indentation defines scope)
+- **Dialogue:** `talk [character_id] [pose_id] "[text]"`
 - **Comments:** Lines starting with `//` are ignored.
 
 ## Navigation & Flow
-- **Jumps:** `-> [label_name]` (Instantly jumps to another label)
+- **Jumps:** `jump [label_name]` (Instantly jumps to another label)
 - **Choices:**
   ```narrat
   choice:
       "Option Text":
-          -> target_label
+          jump target_label
       "Another Option":
-          talk nero "You chose this."
+          jump another_label
   ```
 
 ## Variables & Logic
@@ -30,14 +30,17 @@
 
 ## Example Block
 ```narrat
-label start:
+main:
     background neon_street
-    talk nero "Welcome to the future."
+    talk nero idle "Welcome to the future."
     set has_started true
     choice:
         "Let's go":
-            -> explore
+            jump explore
         "Wait...":
-            talk nero "Take your time."
-            -> start
+            jump wait_a_bit
+
+wait_a_bit:
+    talk nero idle "Take your time."
+    jump main
 ```

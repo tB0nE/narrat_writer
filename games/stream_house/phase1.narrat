@@ -1,8 +1,9 @@
-label start:
+main:
     talk narrator "Welcome to Streamer Mansion: Manager's Cut. Your story begins here."
     choice:
-        label: "Explore" -> explore_start
+        "Explore":
+            jump explore_start
 
-label explore_start:
+explore_start:
     talk narrator "You begin your exploration."
-    -> start
+    jump main

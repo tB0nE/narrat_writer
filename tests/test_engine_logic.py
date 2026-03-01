@@ -6,7 +6,7 @@ def logic_game(client):
     game_id = "logic_test_game"
     client.post("/games/create", json={"name": game_id, "manual_data": {"title": "Logic Test", "summary": "...", "genre": "Test"}})
     script_path = os.path.join("test_games_tmp", game_id, "phase1.narrat")
-    content = """label start:
+    content = """main:
     set test_var 10
     talk narrator "Line 1"
     talk narrator "Line 2"
