@@ -42,3 +42,54 @@ def test_surgical_edit_api(client):
         with open(script_path, "r") as f:
             content = f.read()
         assert 'talk narrator "New Line"' in content
+
+def test_asset_rename_api(client):
+    game_id = "rename_api_test"
+    client.post("/games/create", json={"name": game_id, "manual_data": {"title": "Sara's Story", "summary": "About Sara", "genre": "Test", "characters": ["Sara"]}})
+    
+    # Verify Rename
+    res = client.post(f"/games/{game_id}/assets/rename", json={
+        "category": "characters",
+        "old_id": "sara",
+        "new_id": "sarah"
+    })
+    assert res.status_code == 200
+    
+    meta = client.get(f"/games/{game_id}/metadata").json()
+    assert "Sarah" in meta["characters"]
+    assert "Sarah" in meta["title"]
+
+def test_asset_generation_api(client):
+    game_id = "gen_api_test"
+    client.post("/games/create", json={"name": game_id, "manual_data": {"title": "Test", "summary": "...", "genre": "..."}})
+    
+    with pytest.MonkeyPatch().context() as mp:
+        import main
+        mp.setattr(main, "call_llm", lambda prompt, **kwargs: "AI Generated Description")
+        
+        res = client.post(f"/games/{game_id}/assets/generate", json={
+            "category": "backgrounds",
+            "target": "forest"
+        })
+        assert res.status_code == 200
+        
+        path = os.path.join("test_games_tmp", game_id, "reference", "backgrounds", "forest.txt")
+        assert os.path.exists(path)
+        with open(path, "r") as f:
+            assert f.read() == "AI Generated Description"
+
+def test_metadata_regeneration_api(client):
+    game_id = "regen_api_test"
+    client.post("/games/create", json={"name": game_id, "manual_data": {"title": "Old Title", "summary": "Old Summary", "genre": "Test"}})
+    
+    with pytest.MonkeyPatch().context() as mp:
+        import main
+        # Return a JSON-like string as the AI content
+        mp.setattr(main, "call_llm", lambda prompt, **kwargs: '{"title": "New Title", "summary": "New Summary", "genre": "Sci-Fi"}')
+        
+        res = client.post(f"/games/{game_id}/regenerate", json={"name": game_id, "prompt": "Make it better"})
+        assert res.status_code == 200
+        assert res.json()["metadata"]["title"] == "New Title"
+        
+        meta = client.get(f"/games/{game_id}/metadata").json()
+        assert meta["title"] == "New Title"
