@@ -562,9 +562,11 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
         new_char_list = []
         for c in meta.characters:
             if c.lower() == old_id.lower():
-                new_char_list.append(new_id)
+                # Preserve the case of the original character name
+                replacement = new_id.capitalize() if c[0].isupper() else new_id.lower()
+                new_char_list.append(replacement)
                 meta_changed = True
-                logger.info(f"Updated character list entry: {c} -> {new_id}")
+                logger.info(f"Updated character list entry: {c} -> {replacement}")
             else:
                 new_char_list.append(c)
         meta.characters = new_char_list
