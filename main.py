@@ -398,7 +398,14 @@ async def process_current_step(game_id: str, state: SessionState, parser: Narrat
             state.line_index += 1
         skip_advance = False # Reset for subsequent loops
         
+        # Try to match 'talk char \"text\"' or the shortcut 'char \"text\"'
         talk_match = re.match(r'talk\s+([\w_]+)\s+"(.*)"', stripped)
+        if not talk_match:
+            # Shortcut match: 'char \"text\"' (Ensures it doesn't match commands like background or set)
+            talk_match = re.match(r'^([\w_]+)\s+"(.*)"$', stripped)
+            if talk_match and talk_match.group(1) in ["background", "scene", "jump", "set", "set_expression"]:
+                talk_match = None
+
         if talk_match:
             char, text = talk_match.group(1), talk_match.group(2)
             state.dialogue_log.append({"character": char, "text": text})
@@ -531,50 +538,63 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
     if not meta:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    # 1. Update Metadata
+    # 1. Update Metadata (Characters list and all other text fields)
+    def replace_case_insensitive(text, old, new):
+        if not text: return text
+        return re.sub(rf'(\b){re.escape(old)}(\b)', lambda m: (new.capitalize() if m.group(0)[0].isupper() else new), text, flags=re.IGNORECASE)
+
+    meta_changed = False
     if category == "characters":
-        # Find index case-insensitively
         new_char_list = []
-        found = False
         for c in meta.characters:
             if c.lower() == old_id.lower():
                 new_char_list.append(new_id)
-                found = True
+                meta_changed = True
             else:
                 new_char_list.append(c)
-        
-        if found:
-            meta.characters = new_char_list
-            save_metadata(game_id, meta)
-            logger.info(f"Updated metadata character list: {old_id} -> {new_id}")
+        meta.characters = new_char_list
 
-    # 2. Update Script File (phase1.narrat) - Case Insensitive Refactor
+    # Update title, summary, plot_outline case-insensitively
+    new_title = replace_case_insensitive(meta.title, old_id, new_id)
+    if new_title != meta.title: meta.title = new_title; meta_changed = True
+    
+    new_summary = replace_case_insensitive(meta.summary, old_id, new_id)
+    if new_summary != meta.summary: meta.summary = new_summary; meta_changed = True
+    
+    if meta.plot_outline:
+        new_plot = replace_case_insensitive(meta.plot_outline, old_id, new_id)
+        if new_plot != meta.plot_outline: meta.plot_outline = new_plot; meta_changed = True
+
+    if meta_changed:
+        save_metadata(game_id, meta)
+        logger.info(f"Updated metadata fields for {old_id} -> {new_id}")
+
+    # 2. Update Script File (phase1.narrat) - Case Insensitive & Case Preserving Refactor
     p = get_game_path(game_id, "phase1.narrat")
     if os.path.exists(p):
         with open(p, "r") as f:
             content = f.read()
         
+        # We want to replace technical commands specifically first
         if category == "characters":
-            # Match technical commands: 'talk old_id' or 'set_expression old_id'
             content = re.sub(rf'(\btalk\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
             content = re.sub(rf'(\bset_expression\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
-            # Match spoken instances in dialogue: "Hello old_id!" -> "Hello new_id!"
-            # We look for the ID when it's NOT followed by a colon (which would be a technical label)
-            # and is inside quotes or at word boundaries.
-            content = re.sub(rf'(\b){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
         elif category == "backgrounds":
             content = re.sub(rf'(\bbackground\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
-            content = re.sub(rf'(\b){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
         elif category == "scenes":
             content = re.sub(rf'(\bscene\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
-            content = re.sub(rf'(\b){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
         
-        # Ensure label definitions are also renamed
+        # Replace label definitions
         content = re.sub(rf'^(\s*){old_id}:', f'\\1{new_id}:', content, flags=re.MULTILINE | re.IGNORECASE)
+        # Replace jump targets
+        content = re.sub(rf'(\bjump\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
+
+        # Replace all other mentions (spoken names in dialogue, etc.) with case preservation
+        content = replace_case_insensitive(content, old_id, new_id)
         
         with open(p, "w") as f:
             f.write(content)
-        logger.info(f"Refactored script content: {old_id} -> {new_id}")
+        logger.info(f"Refactored script content for {old_id} -> {new_id}")
 
     # 3. Rename Reference Assets
     old_ref_dir = get_game_path(game_id, "reference", category)
