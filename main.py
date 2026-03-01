@@ -770,6 +770,40 @@ async def regenerate_metadata(game_id: str, req: CreateGameRequest):
         logger.exception("Metadata regeneration failed")
         raise HTTPException(status_code=502, detail=f"Regeneration failed: {str(e)}")
 
+@app.get("/games/{game_id}/saves")
+async def list_saves(game_id: str):
+    """Lists all save sessions for a given game, including basic state info."""
+    path = get_game_path(game_id, "saves")
+    if not os.path.exists(path): return {"saves": []}
+    
+    saves = []
+    for f in os.listdir(path):
+        if f.endswith(".json"):
+            sid = f.replace(".json", "")
+            try:
+                state = load_session(game_id, sid)
+                saves.append({
+                    "id": sid,
+                    "label": state.current_label,
+                    "last_text": state.dialogue_log[-1]["text"] if state.dialogue_log else "Game Start",
+                    "timestamp": os.path.getmtime(os.path.join(path, f))
+                })
+            except:
+                continue
+    
+    # Sort by newest first
+    saves.sort(key=lambda x: x["timestamp"], reverse=True)
+    return {"saves": saves}
+
+@app.delete("/games/{game_id}/saves/{session_id}")
+async def delete_save(game_id: str, session_id: str):
+    """Deletes a specific save file."""
+    path = get_game_path(game_id, "saves", f"{session_id}.json")
+    if os.path.exists(path):
+        os.remove(path)
+        return {"status": "success"}
+    raise HTTPException(status_code=404, detail="Save not found")
+
 @app.get("/games/{game_id}/assets/{category}")
 async def list_assets(game_id: str, category: str):
     """Lists existing asset IDs for a given category (backgrounds, characters, etc.)."""

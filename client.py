@@ -6,6 +6,7 @@ import time
 import subprocess
 import re
 import questionary
+from datetime import datetime
 from prompt_toolkit.input import create_input
 from prompt_toolkit.keys import Keys
 from rich.console import Console, Group
@@ -277,6 +278,63 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
         
         self.game_hub(choice)
 
+    def render_save_manager(self, options, selected_idx, saves) -> Layout:
+        """Renders the save browser with a preview of the highlighted save."""
+        layout = self.make_intro_layout()
+        
+        if selected_idx < len(saves):
+            s = saves[selected_idx]
+            dt = datetime.fromtimestamp(s['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+            info = f"[bold cyan]Save: {s['id']}[/bold cyan]\n[dim]{dt}[/dim]\n\n[bold white]Location:[/bold white] {s['label']}\n\n[bold white]Last Dialogue:[/bold white]\n[italic]\"{s['last_text']}\"[/italic]"
+        else:
+            info = "[dim]Go back to the game hub.[/dim]"
+            
+        layout["left"].update(Panel(Align.center(info, vertical="middle"), title="Save Preview", border_style="cyan"))
+        
+        menu_text = ""
+        for i, opt in enumerate(options):
+            if i == selected_idx:
+                menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
+            else:
+                menu_text += f"  {opt}\n"
+        
+        layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Saves", border_style="yellow"))
+        return layout
+
+    def save_manager_flow(self, game_id):
+        """Interactive flow to list, load, and delete saves."""
+        while True:
+            res = requests.get(f"{BASE_URL}/games/{game_id}/saves")
+            saves = res.json()["saves"]
+            
+            if not saves:
+                console.print("[yellow]No saves found for this game.[/yellow]")
+                questionary.press_any_key_to_continue().ask()
+                return
+
+            save_ids = [s["id"] for s in saves]
+            options = save_ids + ["Back"]
+            
+            choice = self.get_menu_choice(options, lambda opts, idx: self.render_save_manager(opts, idx, saves))
+            
+            if choice == "Back" or choice is None: return
+            
+            # Sub-menu for specific save
+            action = questionary.select(
+                f"Save: {choice}",
+                choices=["Load Save", "Delete Save", "Back"]
+            ).ask()
+            
+            if action == "Load Save":
+                engine = GameEngine(game_id, choice)
+                engine.run()
+                return
+            elif action == "Delete Save":
+                if questionary.confirm(f"Are you sure you want to delete '{choice}'?").ask():
+                    requests.delete(f"{BASE_URL}/games/{game_id}/saves/{choice}")
+                    console.print(f"[red]Save '{choice}' deleted.[/red]")
+                    time.sleep(1)
+
     def render_game_hub(self, options, selected_idx, meta) -> Layout:
         layout = self.make_intro_layout()
         info = f"[bold cyan]{meta['title']}[/bold cyan]\n\n{meta['summary']}\n\n[dim]Genre: {meta['genre']}[/dim]\n[dim]Characters: {', '.join(meta['characters'])}[/dim]"
@@ -307,12 +365,11 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
             
             if choice == "Start New Game":
                 session_id = questionary.text("Enter new session name", default="autosave").ask()
-                engine = GameEngine(game_id, session_id)
-                engine.run()
+                if session_id:
+                    engine = GameEngine(game_id, session_id)
+                    engine.run()
             elif choice == "Load Game":
-                # List saves (Simplified for now)
-                engine = GameEngine(game_id, "autosave")
-                engine.run()
+                self.save_manager_flow(game_id)
             elif choice == "Manage Assets":
                 self.asset_manager_flow(game_id, meta)
             elif choice == "Edit Options":
@@ -392,37 +449,41 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                         console.print("[green]AI generation complete![/green]")
                     questionary.text("[Enter] to continue").ask()
 
-    def edit_metadata_flow(self, game_id, meta):
-        while True:
-            console.clear()
-            table = Table(title=f"Edit Options: {meta['title']}")
-            table.add_column("Option", style="cyan")
-            table.add_column("Field", style="bold")
-            table.add_column("Current Value", style="dim")
-            table.add_row("1", "Title", meta["title"])
-            table.add_row("2", "Summary", meta["summary"][:50] + "...")
-            table.add_row("3", "Genre", meta["genre"])
-            table.add_row("4", "Plot Outline", (meta.get("plot_outline") or "N/A")[:50] + "...")
-            table.add_row("5", "Prompt Prefix", (meta.get("prompt_prefix") or "None")[:50] + "...")
-            console.print(table)
+    def render_metadata_hub(self, options, selected_idx, meta) -> Layout:
+        """Renders the metadata editor with a full preview of the game concept."""
+        layout = self.make_intro_layout()
+        
+        info = f"[bold cyan]Title:[/bold cyan] {meta['title']}\n"
+        info += f"[bold cyan]Genre:[/bold cyan] {meta['genre']}\n\n"
+        info += f"[bold white]Summary:[/bold white]\n{meta['summary']}\n\n"
+        if meta.get("plot_outline"):
+            info += f"[bold white]Plot Outline:[/bold white]\n{meta['plot_outline']}\n\n"
+        info += f"[bold white]Starting Point:[/bold white] {meta.get('starting_point', 'main')}\n"
+        info += f"[bold white]Prompt Prefix:[/bold white] {meta.get('prompt_prefix') or 'None'}"
             
-            choice = questionary.select(
-                "Edit Metadata",
-                choices=[
-                    "Title",
-                    "Summary",
-                    "Genre",
-                    "Plot Outline",
-                    "Prompt Prefix",
-                    "Regenerate All with AI",
-                    "Back"
-                ]
-            ).ask()
+        layout["left"].update(Panel(info, title="Game Metadata Preview", border_style="cyan", padding=(1, 2)))
+        
+        menu_text = ""
+        for i, opt in enumerate(options):
+            if i == selected_idx:
+                menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
+            else:
+                menu_text += f"  {opt}\n"
+        
+        layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Edit Metadata", border_style="yellow"))
+        return layout
+
+    def edit_metadata_flow(self, game_id, meta):
+        """Dedicated UI for browsing and editing game metadata with live feedback."""
+        while True:
+            options = ["Title", "Summary", "Genre", "Plot Outline", "Prompt Prefix", "Starting Point", "Regenerate with AI", "Back"]
+            choice = self.get_menu_choice(options, lambda opts, idx: self.render_metadata_hub(opts, idx, meta))
             
             if choice == "Back" or choice is None: break
             
-            if choice == "Regenerate All with AI":
+            if choice == "Regenerate with AI":
                 prompt = questionary.text("Enter prompt for regeneration (or leave blank to use existing)").ask()
+                if prompt is None: continue
                 with console.status("[bold green]Regenerating metadata...[/bold green]"):
                     res = requests.post(f"{BASE_URL}/games/{game_id}/regenerate", json={"name": game_id, "prompt": prompt or meta['summary']})
                 if res.status_code == 200:
@@ -430,7 +491,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                     meta = res.json()["metadata"]
                 else:
                     console.print(f"[red]Regeneration failed: {res.json().get('detail')}[/red]")
-                questionary.text("[Enter] to continue").ask()
+                questionary.press_any_key_to_continue().ask()
                 continue
 
             field_map = {
@@ -438,10 +499,12 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                 "Summary": "summary",
                 "Genre": "genre",
                 "Plot Outline": "plot_outline",
-                "Prompt Prefix": "prompt_prefix"
+                "Prompt Prefix": "prompt_prefix",
+                "Starting Point": "starting_point"
             }
             field = field_map[choice]
-            new_val = questionary.text(f"Enter new {field}", default=meta.get(field, "")).ask()
+            new_val = questionary.text(f"Enter new {field}", default=str(meta.get(field, ""))).ask()
+            if new_val is None: continue
             
             res = requests.post(f"{BASE_URL}/games/{game_id}/sessions/any/edit", json={
                 "category": "metadata",
@@ -454,7 +517,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                 console.print("[green]Metadata updated![/green]")
             else:
                 console.print("[red]Update failed.[/red]")
-            questionary.text("[Enter] to continue").ask()
+            questionary.press_any_key_to_continue().ask()
 
 # --- GAME ENGINE ---
 
