@@ -1,55 +1,55 @@
-# Headless Narrat
+# Narrat Writer (v0.2.0)
 
-A CLI-based development and writing environment for [Narrat](https://narrat.dev/) visual novels. 
+Narrat Writer is a modular, CLI-based development environment designed for writing, playing, and managing visual novels using the Narrat script syntax. It features deep AI integration for scaffolding games, continuing stories, and refactoring assets.
 
-This project provides a FastAPI backend and a `rich`-powered Python client that allows you to write, test, and dynamically expand `.narrat` scripts directly from your terminal.
+## 🚀 Key Features
 
-## Key Features
+- **Interactive CLI**: Arrow-key navigation and dual-focus gameplay UI.
+- **AI-Powered Scaffolding**: Generate entire game concepts (metadata + initial script) from a single prompt.
+- **Modular Architecture**: Clean separation between the FastAPI backend and Terminal client.
+- **Asset Manager**: Globally refactor characters, backgrounds, and scenes with case-preservation.
+- **Surgical AI Edit**: Use the "Magic Wand" to have AI rewrite specific dialogue lines or choices.
+- **Save Management**: Comprehensive browser to list, preview, and manage game sessions.
+- **Robust Testing**: 100% pass rate across API, Logic, and Visual regression suites.
 
-- **Live Parser & Player:** Play your `.narrat` scripts in a stylized terminal dashboard.
-- **Session State Management:** Automatically saves progress to session-specific JSON files. Supports **Undo/Back (B)** and **Live Reload (R)** to instantly test script changes.
-- **AI-Powered Story Expansion:** If a choice leads to a missing label, the system uses the **GLM-4.7 API** to autonomously generate and append new story branches, including metadata for new backgrounds and characters.
-- **Dynamic Reference Library:** Context-aware UI that pulls character profiles, physical descriptions, and background details from a structured `/reference` folder.
-- **Rich Terminal UI:** A multi-block layout displaying:
-    - **Descriptions:** Background and character lore + active scene/animation events.
-    - **Current State:** Active label and recent variable updates.
-    - **Dialogue:** Immersive character speech with emotion tracking (`set_expression`).
-- **Narrat Expression Support:** Evaluate complex logic like `if (> $data.security_level 50):`.
+## 🛠 Project Structure
 
-## Project Structure
+- `server.py`: Root entry point for the FastAPI backend.
+- `terminal_client.py`: Root entry point for the interactive CLI.
+- `src/server/`: Core backend logic (API, Parser, AI, Utils).
+- `src/terminal_client/`: CLI implementation (Interactive Screens, UI Utils).
+- `prompts.py`: Centralized LLM prompt templates.
+- `games/`: Directory where game scripts, metadata, and saves are stored.
+- `docs/`: Comprehensive project plans and syntax references.
 
-- `main.py`: FastAPI backend handling parsing, state, and AI logic.
-- `client.py`: `rich` CLI client for playing the game.
-- `narrat_syntax.md`: Reference file for supported Narrat syntax.
-- `/reference`: Folder for story assets (backgrounds, characters, scenes, animations).
-- `phase1.narrat`: The entry point for your script.
-- `config.json`: API configuration for AI generation.
+## 🚦 Getting Started
 
-## Getting Started
-
-1. **Install Dependencies:**
+1. **Install Dependencies**:
    ```bash
-   pip install fastapi uvicorn rich requests
+   pip install -r requirements.txt
    ```
 
-2. **Configure AI (Optional):**
-   Update `config.json` with your GLM API key to enable autonomous story generation.
-
-3. **Start the API:**
+2. **Configure Environment**:
+   Copy `.env.example` to `.env` and add your API key:
    ```bash
-   python main.py
+   cp .env.example .env
    ```
 
-4. **Start the Client:**
+3. **Launch Narrat Writer**:
    ```bash
-   python client.py my_session_name
+   ./narrat_writer
+   # OR
+   python terminal_client.py
    ```
 
-## Narrat Syntax Support
-- `label [name]:`
-- `talk [character_id] "[text]"`
-- `choice:` blocks with `label: "Text" -> target`
-- `set [var] [value]`
-- `if (operator operand1 operand2):`
-- `background [bg_id]`, `scene [scene_id]`, `play_animation [anim_id]`
-- `set_expression [char_id] [emotion]`
+## 🧪 Testing
+
+Run the full verification suite:
+```bash
+pytest tests/
+```
+
+## 📜 Documentation
+See the `docs/` folder for:
+- `narrat_syntax.md`: Script writing guide.
+- `plans/`: Historical development roadmaps and future plans.
