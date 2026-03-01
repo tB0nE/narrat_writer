@@ -56,21 +56,22 @@ class Launcher:
         input_obj = create_input()
         
         with Live(make_layout_func(options, idx), auto_refresh=False, screen=True) as live:
-            with input_obj.raw_mode():
-                while True:
-                    live.update(make_layout_func(options, idx))
-                    live.refresh()
-                    
+            while True:
+                live.update(make_layout_func(options, idx))
+                live.refresh()
+                
+                with input_obj.raw_mode():
                     keys = input_obj.read_keys()
-                    for key in keys:
-                        if key.key == Keys.Up:
-                            idx = (idx - 1) % len(options)
-                        elif key.key == Keys.Down:
-                            idx = (idx + 1) % len(options)
-                        elif key.key == Keys.Enter:
-                            return options[idx]
-                        elif key.key == Keys.ControlC:
-                            sys.exit()
+                
+                for key in keys:
+                    if key.key == Keys.Up:
+                        idx = (idx - 1) % len(options)
+                    elif key.key == Keys.Down:
+                        idx = (idx + 1) % len(options)
+                    elif key.key == Keys.Enter:
+                        return options[idx]
+                    elif key.key == Keys.ControlC:
+                        sys.exit()
 
     def make_intro_layout(self) -> Layout:
         layout = Layout()
@@ -149,7 +150,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
             if choice == "Back" or choice is None: break
             
             if choice == "Edit Prompt Prefix":
-                new_prefix = Prompt.ask("Enter new global prompt prefix", default=config.get("global_prompt_prefix", ""))
+                new_prefix = questionary.text("Enter new global prompt prefix", default=config.get("global_prompt_prefix", "")).ask()
                 requests.post(f"{BASE_URL}/config", json={"global_prompt_prefix": new_prefix})
 
     def create_game_flow(self):
@@ -167,13 +168,13 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
         
         if method == "Back" or method is None: return
 
-        game_id = Prompt.ask("Enter unique Game ID (no spaces)")
+        game_id = questionary.text("Enter unique Game ID (no spaces)").ask()
         if not game_id: return
         
         if method == "AI Assisted":
             console.print("\n[bold cyan]AI Guidance:[/bold cyan]")
             console.print("Describe your game idea. Include [italic]Genre, Setting, Characters, and Plot hooks.[/italic]")
-            prompt = Prompt.ask("\n[bold green]Enter your prompt[/bold green]")
+            prompt = questionary.text("\n[bold green]Enter your prompt[/bold green]").ask()
             
             while True:
                 with console.status("[bold green]AI is scaffolding your game...[/bold green]"):
@@ -194,17 +195,17 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                     
                     if action == "Back to menu" or action is None: return
                     if action == "Edit prompt":
-                        prompt = Prompt.ask("\n[bold green]Enter new prompt[/bold green]")
+                        prompt = questionary.text("\n[bold green]Enter new prompt[/bold green]").ask()
         else:
-            title = Prompt.ask("Game Title")
-            summary = Prompt.ask("Game Summary")
+            title = questionary.text("Game Title").ask()
+            summary = questionary.text("Game Summary").ask()
             res = requests.post(f"{BASE_URL}/games/create", json={"name": game_id, "manual_data": {"title": title, "summary": summary, "genre": "Custom"}})
             if res.status_code == 200:
                 console.print(f"[green]Game '{game_id}' created successfully![/green]")
                 self.game_hub(game_id)
             else:
                 console.print(f"[red]Error: {res.json().get('detail', 'Unknown error')}[/red]")
-                Prompt.ask("[Enter] to continue")
+                questionary.text("[Enter] to continue").ask()
 
     def select_game_flow(self):
         res = requests.get(f"{BASE_URL}/games")
@@ -212,7 +213,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
         
         if not games:
             console.print("[yellow]No games found. Create one first![/yellow]")
-            Prompt.ask("[Enter] to continue")
+            questionary.text("[Enter] to continue").ask()
             return
 
         table = Table(title="Available Games")
@@ -265,7 +266,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
             if choice == "Back" or choice is None: return
             
             if choice == "Start New Game":
-                session_id = Prompt.ask("Enter new session name", default="autosave")
+                session_id = questionary.text("Enter new session name", default="autosave").ask()
                 engine = GameEngine(game_id, session_id)
                 engine.run()
             elif choice == "Load Game":
@@ -313,7 +314,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                 if asset_id == "Back" or asset_id is None: break
                 
                 if asset_id == "Add New":
-                    asset_id = Prompt.ask("Enter unique ID for new asset")
+                    asset_id = questionary.text("Enter unique ID for new asset").ask()
                     if not asset_id: continue
                 
                 # Sub-menu for specific asset
@@ -334,7 +335,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                     if action == "Back" or action is None: break
                     
                     if action == "Rename Globally":
-                        new_id = Prompt.ask(f"Enter new ID for {asset_id}")
+                        new_id = questionary.text(f"Enter new ID for {asset_id}").ask()
                         if new_id:
                             with console.status(f"Refactoring {asset_id} -> {new_id}..."):
                                 res = requests.post(f"{BASE_URL}/games/{game_id}/assets/rename", json={"category": category, "old_id": asset_id, "new_id": new_id})
@@ -343,13 +344,13 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                                 asset_id = new_id
                                 break # Back to asset list
                     elif action == "Edit Description":
-                        nd = Prompt.ask("Enter new description")
+                        nd = questionary.text("Enter new description").ask()
                         requests.post(f"{BASE_URL}/games/{game_id}/sessions/any/edit", json={"category": "reference", "action": "update", "sub_category": category[:-1], "target": asset_id, "content": nd})
                     elif action == "AI Generate Description":
                         with console.status("AI is generating..."):
                             requests.post(f"{BASE_URL}/games/{game_id}/assets/generate", json={"category": category, "target": asset_id})
                         console.print("[green]AI generation complete![/green]")
-                    Prompt.ask("[Enter] to continue")
+                    questionary.text("[Enter] to continue").ask()
 
     def edit_metadata_flow(self, game_id, meta):
         while True:
@@ -381,7 +382,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
             if choice == "Back" or choice is None: break
             
             if choice == "Regenerate All with AI":
-                prompt = Prompt.ask("Enter prompt for regeneration (or leave blank to use existing)")
+                prompt = questionary.text("Enter prompt for regeneration (or leave blank to use existing)").ask()
                 with console.status("[bold green]Regenerating metadata...[/bold green]"):
                     res = requests.post(f"{BASE_URL}/games/{game_id}/regenerate", json={"name": game_id, "prompt": prompt or meta['summary']})
                 if res.status_code == 200:
@@ -389,7 +390,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                     meta = res.json()["metadata"]
                 else:
                     console.print(f"[red]Regeneration failed: {res.json().get('detail')}[/red]")
-                Prompt.ask("[Enter] to continue")
+                questionary.text("[Enter] to continue").ask()
                 continue
 
             field_map = {
@@ -400,7 +401,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                 "Prompt Prefix": "prompt_prefix"
             }
             field = field_map[choice]
-            new_val = Prompt.ask(f"Enter new {field}", default=meta.get(field, ""))
+            new_val = questionary.text(f"Enter new {field}", default=meta.get(field, "")).ask()
             
             res = requests.post(f"{BASE_URL}/games/{game_id}/sessions/any/edit", json={
                 "category": "metadata",
@@ -413,7 +414,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                 console.print("[green]Metadata updated![/green]")
             else:
                 console.print("[red]Update failed.[/red]")
-            Prompt.ask("[Enter] to continue")
+            questionary.text("[Enter] to continue").ask()
 
 # --- GAME ENGINE ---
 
@@ -615,7 +616,7 @@ class GameEngine:
                         requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "script", "action": "update", "target": str(idx), "content": f"background {c}"})
             elif p == "Edit Description":
                 bg = self.data.get("background", "None")
-                nd = Prompt.ask(f"  New Desc for {bg} (or [G]enerate with AI)", default="G")
+                nd = questionary.text(f"  New Desc for {bg} (or [G]enerate with AI)", default="G").ask()
                 if nd.upper() == "G":
                     with console.status(f"[bold green]AI is describing {bg}...[/bold green]"):
                         res = requests.post(f"{BASE_URL}/games/{self.game_id}/assets/generate", json={"category": "backgrounds", "target": bg})
@@ -623,14 +624,14 @@ class GameEngine:
                         console.print(f"[green]AI described {bg}![/green]")
                     else:
                         console.print(f"[red]Generation failed: {res.json().get('detail')}[/red]")
-                        Prompt.ask("[Enter] to continue")
+                        questionary.text("[Enter] to continue").ask()
                 else:
                     requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "reference", "action": "update", "sub_category": "background", "target": bg, "content": nd})
         elif edit_type == "Character":
             char = self.data.get("character")
             if not char:
                 console.print("[red]No character active.[/red]")
-                Prompt.ask("[Enter] to continue")
+                questionary.text("[Enter] to continue").ask()
                 return
             p = questionary.select(
                 f"Character Edit: {char}",
@@ -643,7 +644,7 @@ class GameEngine:
                     requests.post(f"{BASE_URL}/games/{self.game_id}/assets/generate", json={"category": "characters", "target": char, "sub_type": "profile"})
                 console.print(f"[green]AI described {char}![/green]")
             elif p == "Rename Globally":
-                new_name = Prompt.ask(f"Enter new global ID for {char} (no spaces)")
+                new_name = questionary.text(f"Enter new global ID for {char} (no spaces)").ask()
                 if new_name:
                     with console.status(f"[bold yellow]Refactoring {char} to {new_name}...[/bold yellow]"):
                         res = requests.post(f"{BASE_URL}/games/{self.game_id}/characters/rename", json={"old_id": char, "new_id": new_name})
@@ -652,15 +653,15 @@ class GameEngine:
                         self.data["character"] = new_name
                     else:
                         console.print(f"[red]Rename failed: {res.json().get('detail')}[/red]")
-                Prompt.ask("[Enter] to continue")
+                questionary.text("[Enter] to continue").ask()
             elif p == "Edit Description":
-                nd = Prompt.ask(f"  New description for {char}")
+                nd = questionary.text(f"  New description for {char}").ask()
                 requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "reference", "action": "update", "sub_category": "character", "target": char, "content": nd, "meta": {"type": "description"}})
             elif p == "Edit Profile":
-                nd = Prompt.ask(f"  New profile for {char}")
+                nd = questionary.text(f"  New profile for {char}").ask()
                 requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "reference", "action": "update", "sub_category": "character", "target": char, "content": nd, "meta": {"type": "profile"}})
         elif edit_type == "Dialogue":
-            new_text = Prompt.ask("  New Text")
+            new_text = questionary.text("  New Text").ask()
             if new_text:
                 requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "script", "action": "update", "target": str(idx), "content": f"talk {self.data.get('character', 'narrator')} \"{new_text}\""})
 
@@ -670,13 +671,16 @@ class GameEngine:
         
         input_obj = create_input()
         
-        with Live(self.display_game(), auto_refresh=False, screen=True) as live:
-            with input_obj.raw_mode():
-                while True:
+        while True:
+            with Live(self.display_game(), auto_refresh=False, screen=True) as live:
+                cmd = None
+                while cmd is None:
                     live.update(self.display_game())
                     live.refresh()
                     
-                    keys = input_obj.read_keys()
+                    with input_obj.raw_mode():
+                        keys = input_obj.read_keys()
+                    
                     for key in keys:
                         if key.key == Keys.Tab:
                             if self.data.get("type") == "choice":
@@ -705,7 +709,6 @@ class GameEngine:
                                     self.choice_idx = (self.choice_idx + 1) % options_count
                         
                         elif key.key == Keys.Enter:
-                            cmd = None
                             if self.focus == "choices":
                                 opt_keys = list(self.data["options"].keys())
                                 cmd = opt_keys[self.choice_idx]
@@ -716,59 +719,54 @@ class GameEngine:
                                 if action == "Next": cmd = " "
                                 elif action == "View Script": 
                                     self.show_script = not self.show_script
+                                    live.update(self.display_game())
+                                    live.refresh()
                                     continue
                                 elif action == "Reload": cmd = "R"
                                 elif action == "Back": cmd = "B"
                                 elif action == "Edit":
-                                    # Temporarily exit raw mode and stop live for sub-prompts
-                                    # We do this by breaking out or hijacking.
-                                    # Since handle_edit uses Prompt.ask, we MUST stop Live.
-                                    live.stop()
-                                    # We also need to exit raw_mode context, but it's hard to do mid-loop.
-                                    # Actually create_input().raw_mode() is a context manager.
-                                    # Let's just finish the current 'with input_obj.raw_mode()' by returning/breaking?
-                                    # No, that's too complex.
-                                    # Let's try just stopping live.
-                                    self.handle_edit()
-                                    live.start()
-                                    cmd = "REFRESH"
+                                    # Signal that we need to break out of Live to run edit
+                                    cmd = "DO_EDIT"
                                 elif action == "Exit": return
-
-                            if cmd is not None:
-                                res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": str(cmd)})
-                                self.data = res.json()
-                                if self.data.get("type") == "choice":
-                                    self.focus = "choices"
-                                    self.choice_idx = 0
-                                
-                                if self.data.get("type") == "end":
-                                    live.stop()
-                                    choice = questionary.select("End of Script.", choices=["Generate More", "Restart", "Exit"]).ask()
-                                    if choice == "Generate More":
-                                        requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/continue")
-                                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
-                                        self.data = res.json()
-                                        live.start()
-                                    elif choice == "Restart":
-                                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
-                                        self.data = res.json()
-                                        live.start()
-                                    else:
-                                        return
-                                
-                                if self.data.get("type") == "missing_label":
-                                    live.stop()
-                                    c = questionary.select(f"Label '{self.data['meta']['target']}' is missing!", choices=["Generate with AI", "Back (Undo)"]).ask()
-                                    if c == "Generate with AI":
-                                        requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/generate", json={"target": self.data["meta"]["target"]})
-                                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
-                                    else:
-                                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "B"})
-                                    self.data = res.json()
-                                    live.start()
 
                         elif key.key == Keys.ControlC:
                             return
+
+                # --- EXIT LIVE CONTEXT FOR BLOCKING SUB-PROMPTS ---
+            
+            if cmd == "DO_EDIT":
+                self.handle_edit()
+                cmd = "REFRESH"
+            
+            # Perform the step
+            res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": str(cmd)})
+            self.data = res.json()
+            
+            # Handle post-step logic (choices, end, missing)
+            if self.data.get("type") == "choice":
+                self.focus = "choices"
+                self.choice_idx = 0
+            
+            if self.data.get("type") == "end":
+                choice = questionary.select("End of Script.", choices=["Generate More", "Restart", "Exit"]).ask()
+                if choice == "Generate More":
+                    requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/continue")
+                    res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
+                    self.data = res.json()
+                elif choice == "Restart":
+                    res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
+                    self.data = res.json()
+                else:
+                    return
+            
+            if self.data.get("type") == "missing_label":
+                c = questionary.select(f"Label '{self.data['meta']['target']}' is missing!", choices=["Generate with AI", "Back (Undo)"]).ask()
+                if c == "Generate with AI":
+                    requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/generate", json={"target": self.data["meta"]["target"]})
+                    res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
+                else:
+                    res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "B"})
+                self.data = res.json()
 
 # --- MAIN ---
 

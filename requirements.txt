@@ -6,3 +6,4 @@ pydantic
 pytest
 httpx
 questionary
+prompt_toolkit
