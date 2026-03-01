@@ -514,61 +514,76 @@ async def process_current_step(game_id: str, state: SessionState, parser: Narrat
             continue
     return DialogueResponse(type="end", text="End.")
 
-@app.post("/games/{game_id}/characters/rename")
-async def rename_character(game_id: str, req: Dict[str, str]):
+@app.post("/games/{game_id}/assets/rename")
+async def rename_asset(game_id: str, req: Dict[str, str]):
     """
-    Globally renames a character in metadata, script, and reference files.
-    req should contain 'old_id' and 'new_id'.
+    Globally renames an asset (character, background, or scene) in metadata, 
+    script, and reference files. Case-insensitive matching for the script.
     """
+    category = req.get("category") # characters, backgrounds, scenes
     old_id = req.get("old_id")
     new_id = req.get("new_id")
-    if not old_id or not new_id:
-        raise HTTPException(status_code=400, detail="Missing old_id or new_id")
+    
+    if not all([category, old_id, new_id]):
+        raise HTTPException(status_code=400, detail="Missing category, old_id, or new_id")
 
     meta = load_metadata(game_id)
     if not meta:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    # 1. Update Metadata
-    if old_id in meta.characters:
+    # 1. Update Metadata (if character)
+    if category == "characters" and old_id in meta.characters:
         meta.characters = [new_id if c == old_id else c for c in meta.characters]
         save_metadata(game_id, meta)
-        logger.info(f"Updated metadata characters: {old_id} -> {new_id}")
 
-    # 2. Update Script File (phase1.narrat)
+    # 2. Update Script File (phase1.narrat) - Case Insensitive Refactor
     p = get_game_path(game_id, "phase1.narrat")
     if os.path.exists(p):
         with open(p, "r") as f:
             content = f.read()
         
-        # Replace 'talk old_id ' or 'talk old_id\n' (but not as part of another word)
-        content = re.sub(rf'(\btalk\s+){old_id}(\b)', f'\\1{new_id}\\2', content)
-        # Replace 'set_expression old_id '
-        content = re.sub(rf'(\bset_expression\s+){old_id}(\b)', f'\\1{new_id}\\2', content)
+        if category == "characters":
+            # Match 'talk old_id' or 'set_expression old_id' (Case Insensitive)
+            content = re.sub(rf'(\btalk\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
+            content = re.sub(rf'(\bset_expression\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
+        elif category == "backgrounds":
+            # Match 'background old_id'
+            content = re.sub(rf'(\bbackground\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
+        elif category == "scenes":
+            # Match 'scene old_id'
+            content = re.sub(rf'(\bscene\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
         
         with open(p, "w") as f:
             f.write(content)
-        logger.info(f"Updated script file with new character ID: {new_id}")
+        logger.info(f"Refactored script: {old_id} -> {new_id} (Category: {category})")
 
     # 3. Rename Reference Assets
-    old_ref_path = get_game_path(game_id, "reference", "characters", old_id)
-    new_ref_path = get_game_path(game_id, "reference", "characters", new_id)
+    old_ref_dir = get_game_path(game_id, "reference", category)
+    if category == "characters":
+        old_path = os.path.join(old_ref_dir, old_id)
+        new_path = os.path.join(old_ref_dir, new_id)
+    else:
+        old_path = os.path.join(old_ref_dir, f"{old_id}.txt")
+        new_path = os.path.join(old_ref_dir, f"{new_id}.txt")
     
-    if os.path.exists(old_ref_path):
-        # Rename the folder
-        if os.path.exists(new_ref_path):
-            shutil.rmtree(new_ref_path) # Overwrite if exists? Or merge? safer to just move
-        os.rename(old_ref_path, new_ref_path)
+    if os.path.exists(old_path):
+        if os.path.exists(new_path):
+            if os.path.isdir(new_path): shutil.rmtree(new_path)
+            else: os.remove(new_path)
         
-        # Rename files inside the folder if they follow the pattern old_id_type.txt
-        for filename in os.listdir(new_ref_path):
-            if filename.startswith(f"{old_id}_"):
-                new_filename = filename.replace(f"{old_id}_", f"{new_id}_", 1)
-                os.rename(
-                    os.path.join(new_ref_path, filename),
-                    os.path.join(new_ref_path, new_filename)
-                )
-        logger.info(f"Renamed reference assets from {old_id} to {new_id}")
+        os.rename(old_path, new_path)
+        
+        # Character-specific internal file renaming
+        if category == "characters" and os.path.isdir(new_path):
+            for filename in os.listdir(new_path):
+                if filename.lower().startswith(f"{old_id.lower()}_"):
+                    new_filename = filename.replace(old_id, new_id, 1) # Keep case of suffix
+                    # If the above failed due to casing, try a simple lower replace
+                    if new_filename == filename:
+                         new_filename = re.sub(rf'^{old_id}_', f'{new_id}_', filename, flags=re.IGNORECASE)
+                    os.rename(os.path.join(new_path, filename), os.path.join(new_path, new_filename))
+        
+        logger.info(f"Renamed reference assets for {category}")
 
     return {"status": "success", "old_id": old_id, "new_id": new_id}
 

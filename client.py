@@ -196,13 +196,13 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
             
             layout["left"].update(Panel(Align.center(info, vertical="middle"), border_style="cyan"))
             
-            options = "[1] Start New Game\n[2] Load Game\n[3] Edit Options\n[B]ack"
+            options = "[1] Start New Game\n[2] Load Game\n[3] Manage Assets\n[4] Edit Options\n[B]ack"
             layout["right"].update(Panel(Align.center(options, vertical="middle"), title="Game Hub", border_style="yellow"))
             
             console.clear()
             console.print(layout, height=console.height - 2)
             
-            choice = Prompt.ask("\n[bold green]Select Option[/bold green]", choices=["1", "2", "3", "B", "b"])
+            choice = Prompt.ask("\n[bold green]Select Option[/bold green]", choices=["1", "2", "3", "4", "B", "b"])
             if choice.upper() == "B": return
             
             if choice == "1":
@@ -214,7 +214,61 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                 engine = GameEngine(game_id, "autosave")
                 engine.run()
             elif choice == "3":
+                self.asset_manager_flow(game_id, meta)
+            elif choice == "4":
                 self.edit_metadata_flow(game_id, meta)
+
+    def asset_manager_flow(self, game_id, meta):
+        while True:
+            console.clear()
+            console.print(Panel(f"[bold yellow]Asset Manager: {meta['title']}[/bold yellow]", border_style="yellow"))
+            cat_choice = Prompt.ask("\nCategory: [1] Backgrounds | [2] Characters | [3] Scenes | [B]ack", choices=["1", "2", "3", "B", "b"])
+            if cat_choice.upper() == "B": break
+            
+            categories = {"1": "backgrounds", "2": "characters", "3": "scenes"}
+            category = categories[cat_choice]
+            
+            while True:
+                res = requests.get(f"{BASE_URL}/games/{game_id}/assets/{category}")
+                assets = res.json()["assets"]
+                
+                table = Table(title=f"Manage {category.capitalize()}")
+                table.add_column("ID", style="cyan")
+                for a in assets: table.add_row(a)
+                console.clear()
+                console.print(table)
+                
+                target = Prompt.ask(f"\nSelect {category[:-1]} ID to edit, [A]dd new, or [B]ack", choices=assets + ["A", "a", "B", "b"])
+                if target.upper() == "B": break
+                
+                if target.upper() == "A":
+                    target = Prompt.ask("Enter unique ID for new asset")
+                    if not target: continue
+                
+                # Sub-menu for specific asset
+                while True:
+                    console.clear()
+                    console.print(Panel(f"[bold cyan]Editing {category[:-1]}: {target}[/bold cyan]"))
+                    action = Prompt.ask("\n[1] Rename Globally | [2] Edit Description | [3] AI Generate | [B]ack", choices=["1", "2", "3", "B", "b"])
+                    if action.upper() == "B": break
+                    
+                    if action == "1":
+                        new_id = Prompt.ask(f"Enter new ID for {target}")
+                        if new_id:
+                            with console.status(f"Refactoring {target} -> {new_id}..."):
+                                res = requests.post(f"{BASE_URL}/games/{game_id}/assets/rename", json={"category": category, "old_id": target, "new_id": new_id})
+                            if res.status_code == 200:
+                                console.print("[green]Success![/green]")
+                                target = new_id
+                                break # Back to asset list
+                    elif action == "2":
+                        nd = Prompt.ask("Enter new description")
+                        requests.post(f"{BASE_URL}/games/{game_id}/sessions/any/edit", json={"category": "reference", "action": "update", "sub_category": category[:-1], "target": target, "content": nd})
+                    elif action == "3":
+                        with console.status("AI is generating..."):
+                            requests.post(f"{BASE_URL}/games/{game_id}/assets/generate", json={"category": category, "target": target})
+                        console.print("[green]AI generation complete![/green]")
+                    Prompt.ask("[Enter] to continue")
 
     def edit_metadata_flow(self, game_id, meta):
         while True:
