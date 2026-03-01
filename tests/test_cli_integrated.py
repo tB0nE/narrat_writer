@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from rich.console import Console
-from client import Launcher, GameEngine
+from terminal_client import Launcher, GameEngine
 
 @pytest.fixture
 def test_console():

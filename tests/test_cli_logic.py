@@ -1,14 +1,14 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from client import Launcher
+from terminal_client import Launcher
 
 def test_launcher_navigation_logic():
     launcher = Launcher()
     
     # Mock dependencies
-    with patch('client.requests.get') as mock_get, \
-         patch('client.questionary.select') as mock_select, \
-         patch('client.Launcher.get_menu_choice') as mock_menu:
+    with patch('terminal_client.requests.get') as mock_get, \
+         patch('terminal_client.questionary.select') as mock_select, \
+         patch('terminal_client.Launcher.get_menu_choice') as mock_menu:
         
         # 1. Simulate selecting 'Exit' immediately
         mock_menu.return_value = "Exit"
@@ -31,8 +31,8 @@ def test_game_hub_loading():
         "plot_outline": "The plot"
     }
     
-    with patch('client.requests.get') as mock_get, \
-         patch('client.Launcher.get_menu_choice') as mock_menu:
+    with patch('terminal_client.requests.get') as mock_get, \
+         patch('terminal_client.Launcher.get_menu_choice') as mock_menu:
         
         mock_response = MagicMock()
         mock_response.json.return_value = mock_meta
@@ -48,7 +48,7 @@ def test_game_hub_loading():
         print("Game Hub correctly loads metadata and handles 'Back'.")
 
 def test_game_engine_focus_logic():
-    from client import GameEngine
+    from terminal_client import GameEngine
     engine = GameEngine("test_game", "test_session")
     
     # Initially should focus actions
@@ -71,8 +71,8 @@ def test_asset_manager_navigation():
     launcher = Launcher()
     meta = {"title": "Test"}
     
-    with patch('client.requests.get') as mock_get, \
-         patch('client.questionary.select') as mock_select:
+    with patch('terminal_client.requests.get') as mock_get, \
+         patch('terminal_client.questionary.select') as mock_select:
         
         # We need to handle the nested while True loops.
         # Outer loop: Category selection

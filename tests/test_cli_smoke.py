@@ -8,7 +8,7 @@ def test_cli_starts_and_exits():
     env["GARRAT_GAMES_DIR"] = "test_games_tmp"
     
     # Spawn the process
-    child = pexpect.spawn(f"{sys.executable} client.py", env=env, encoding='utf-8', timeout=10)
+    child = pexpect.spawn(f"{sys.executable} terminal_client.py", env=env, encoding='utf-8', timeout=10)
     
     # 1. Wait for the Main Menu to appear
     child.expect("Main Menu")

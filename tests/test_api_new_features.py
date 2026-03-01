@@ -29,8 +29,8 @@ def test_surgical_edit_api(client):
     
     # Mock the LLM call inside the API
     with pytest.MonkeyPatch().context() as mp:
-        import main
-        mp.setattr(main, "call_llm", lambda prompt, **kwargs: 'talk narrator "New Line"')
+        import server
+        mp.setattr(server, "call_llm", lambda prompt, **kwargs: 'talk narrator "New Line"')
         
         res = client.post(f"/games/{game_id}/sessions/any/edit/ai", json={
             "target": "1", # index of the 'talk' line (0 is 'main:')
@@ -64,8 +64,8 @@ def test_asset_generation_api(client):
     client.post("/games/create", json={"name": game_id, "manual_data": {"title": "Test", "summary": "...", "genre": "..."}})
     
     with pytest.MonkeyPatch().context() as mp:
-        import main
-        mp.setattr(main, "call_llm", lambda prompt, **kwargs: "AI Generated Description")
+        import server
+        mp.setattr(server, "call_llm", lambda prompt, **kwargs: "AI Generated Description")
         
         res = client.post(f"/games/{game_id}/assets/generate", json={
             "category": "backgrounds",
@@ -83,9 +83,9 @@ def test_metadata_regeneration_api(client):
     client.post("/games/create", json={"name": game_id, "manual_data": {"title": "Old Title", "summary": "Old Summary", "genre": "Test"}})
     
     with pytest.MonkeyPatch().context() as mp:
-        import main
+        import server
         # Return a JSON-like string as the AI content
-        mp.setattr(main, "call_llm", lambda prompt, **kwargs: '{"title": "New Title", "summary": "New Summary", "genre": "Sci-Fi"}')
+        mp.setattr(server, "call_llm", lambda prompt, **kwargs: '{"title": "New Title", "summary": "New Summary", "genre": "Sci-Fi"}')
         
         res = client.post(f"/games/{game_id}/regenerate", json={"name": game_id, "prompt": "Make it better"})
         assert res.status_code == 200

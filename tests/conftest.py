@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 os.environ["GARRAT_GAMES_DIR"] = "test_games_tmp"
 
 from fastapi.testclient import TestClient
-from main import app
+from server import app
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_env():

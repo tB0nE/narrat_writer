@@ -8,6 +8,10 @@ from pydantic import BaseModel
 from typing import Dict, List, Optional, Any
 import requests as sync_requests # For AI API call
 import prompts
+from dotenv import load_dotenv
+
+# --- CONFIGURATION SETUP ---
+load_dotenv()
 
 # --- LOGGING SETUP ---
 logging.basicConfig(
@@ -24,6 +28,10 @@ app = FastAPI(title="Headless Narrat API", version="0.2.0")
 
 # --- CONFIGURATION ---
 GAMES_DIR = os.getenv("GARRAT_GAMES_DIR", "games")
+NARRAT_MODE = os.getenv("NARRAT_MODE", "developer")
+API_URL = os.getenv("API_URL")
+API_MODEL = os.getenv("API_MODEL")
+API_KEY = os.getenv("API_KEY")
 
 # --- DATA MODELS ---
 
@@ -86,14 +94,10 @@ def call_llm(prompt: str, retries: int = 3, game_id: str = None) -> str:
     Core LLM API wrapper with retry logic, global/local prompt_prefix support, 
     and detailed logging.
     """
-    with open("config.json", "r") as f:
-        config = json.load(f)
-    
     # Prefix Logic
     prefix = ""
-    # 1. Global Prefix
-    if config.get("global_prompt_prefix"):
-        prefix = config.get("global_prompt_prefix")
+    # 1. Global Prefix (From environment or local config if we still allowed it)
+    prefix = os.getenv("GLOBAL_PROMPT_PREFIX", "")
     
     # 2. Per-Game Prefix (overrides global)
     if game_id:
@@ -103,17 +107,17 @@ def call_llm(prompt: str, retries: int = 3, game_id: str = None) -> str:
             
     final_prompt = f"{prefix}\n\n{prompt}" if prefix else prompt
 
-    if config.get("api_key") == "YOUR_API_KEY_HERE":
+    if not API_KEY or API_KEY == "YOUR_API_KEY_HERE":
         logger.warning("API Key not configured. Returning fallback data.")
-        return '{"title": "Unconfigured Game", "summary": "Please set your API key in config.json", "genre": "System", "characters": [], "starting_point": "main", "plot_outline": ""}'
+        return '{"title": "Unconfigured Game", "summary": "Please set your API key in .env", "genre": "System", "characters": [], "starting_point": "main", "plot_outline": ""}'
 
-    headers = {"Authorization": f"Bearer {config['api_key']}", "Content-Type": "application/json"}
-    payload = {"model": config["model"], "messages": [{"role": "user", "content": final_prompt}]}
+    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+    payload = {"model": API_MODEL, "messages": [{"role": "user", "content": final_prompt}]}
     
     for attempt in range(retries):
         try:
             logger.info(f"AI Request (Attempt {attempt + 1}/{retries}): {final_prompt[:100]}...")
-            res = sync_requests.post(config["api_url"], json=payload, headers=headers, timeout=90)
+            res = sync_requests.post(API_URL, json=payload, headers=headers, timeout=90)
             res.raise_for_status()
             content = res.json()["choices"][0]["message"]["content"]
             logger.info(f"AI Response received: {len(content)} chars.")
@@ -248,19 +252,24 @@ def get_reference(game_id: str, category: str, name: str, sub_type: str = None) 
 
 @app.get("/config")
 async def get_api_config():
-    """Returns the current API and global configuration."""
-    with open("config.json", "r") as f:
-        return json.load(f)
+    """Returns the current API and global configuration from environment."""
+    return {
+        "api_url": API_URL,
+        "model": API_MODEL,
+        "narrat_mode": NARRAT_MODE,
+        "global_prompt_prefix": os.getenv("GLOBAL_PROMPT_PREFIX", "")
+    }
 
 @app.post("/config")
 async def update_api_config(new_config: Dict[str, Any]):
-    """Updates and persists the global configuration."""
-    with open("config.json", "r") as f:
-        config = json.load(f)
-    config.update(new_config)
-    with open("config.json", "w") as f:
-        json.dump(config, f, indent=4)
-    return {"status": "success", "config": config}
+    """
+    Updates the global configuration. 
+    Note: In a real .env setup, this might not persist to the file easily,
+    but we'll update the current process state.
+    """
+    if "global_prompt_prefix" in new_config:
+        os.environ["GLOBAL_PROMPT_PREFIX"] = new_config["global_prompt_prefix"]
+    return {"status": "success", "config": await get_api_config()}
 
 @app.get("/games")
 async def list_games():

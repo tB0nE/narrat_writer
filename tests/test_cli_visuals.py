@@ -1,5 +1,5 @@
 import pytest
-from client import Launcher
+from terminal_client import Launcher
 from rich.console import Console
 from unittest.mock import MagicMock
 import os
@@ -9,10 +9,10 @@ def test_intro_screen_visual_snapshot():
     # Create a console that records its output
     recording_console = Console(width=100, height=30, record=True, color_system="truecolor")
     
-    # We need to temporarily patch the global 'console' in client.py
-    import client
-    original_console = client.console
-    client.console = recording_console
+    # We need to temporarily patch the global 'console' in terminal_client.py
+    import terminal_client
+    original_console = terminal_client.console
+    terminal_client.console = recording_console
     
     try:
         # Mock options and selection
@@ -46,7 +46,7 @@ def test_intro_screen_visual_snapshot():
         
     finally:
         # Restore original console
-        client.console = original_console
+        terminal_client.console = original_console
 
 if __name__ == "__main__":
     test_intro_screen_visual_snapshot()

@@ -30,7 +30,7 @@ def ensure_server_running():
     except:
         # Start server using the same python interpreter
         proc = subprocess.Popen(
-            [sys.executable, "main.py"],
+            [sys.executable, "server.py"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             preexec_fn=os.setsid # Ensure it gets its own process group for clean killing
@@ -123,13 +123,19 @@ class Launcher:
         ]
         logo_text = Text("\n".join(logo_lines), style="red")
         
-        description = """
+        # Try to fetch mode from server
+        try:
+            mode = requests.get(f"{self.base_url}/config").json().get("narrat_mode", "unknown")
+        except:
+            mode = "unknown"
+
+        description = f"""
 [bold white]Narrat Writer[/bold white]
 
 A CLI-based development environment for writing and playing visual novels. 
 Experience immersive storytelling, dynamic AI generation, and real-time script editing.
 
-[dim]Version 0.2.0[/dim]
+[dim]Version 0.2.0 | Mode: {mode.capitalize()}[/dim]
         """
         
         # Group both elements and center them individually within the group's container

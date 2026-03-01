@@ -8,3 +8,4 @@ httpx
 questionary
 prompt_toolkit
 pexpect
+python-dotenv
