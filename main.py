@@ -539,19 +539,23 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
         raise HTTPException(status_code=404, detail="Game not found")
 
     # 1. Update Metadata (Characters list and all other text fields)
-    def apply_triple_rename(text, old, new):
+    def apply_smart_rename(text, old, new):
         if not text: return text
-        # Pass 1: exact match (often catches technical IDs)
-        text = re.sub(rf'\b{old}\b', new, text)
-        # Pass 2: Lowercase
-        text = re.sub(rf'\b{old.lower()}\b', new.lower(), text)
-        # Pass 3: Titlecase / Capitalized
-        text = re.sub(rf'\b{old.capitalize()}\b', new.capitalize(), text)
-        # Pass 4: Uppercase
-        text = re.sub(rf'\b{old.upper()}\b', new.upper(), text)
+        
+        # We perform 3 distinct passes to ensure we catch all casing variations
+        # regardless of what casing 'old' or 'new' currently have.
+        
+        # Pass 1: UPPER CASE
+        text = re.sub(rf'\b{re.escape(old.upper())}\b', new.upper(), text)
+        # Pass 2: Title Case (Capitalized)
+        text = re.sub(rf'\b{re.escape(old.capitalize())}\b', new.capitalize(), text)
+        # Pass 3: lower case
+        text = re.sub(rf'\b{re.escape(old.lower())}\b', new.lower(), text)
+        
         return text
 
     meta_changed = False
+    logger.info(f"Starting global refactor: {old_id} -> {new_id} (Category: {category})")
     
     # Update technical character list
     if category == "characters":
@@ -560,6 +564,7 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
             if c.lower() == old_id.lower():
                 new_char_list.append(new_id)
                 meta_changed = True
+                logger.info(f"Updated character list entry: {c} -> {new_id}")
             else:
                 new_char_list.append(c)
         meta.characters = new_char_list
@@ -568,14 +573,15 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
     for field in ["title", "summary", "plot_outline"]:
         val = getattr(meta, field)
         if val:
-            new_val = apply_triple_rename(val, old_id, new_id)
+            new_val = apply_smart_rename(val, old_id, new_id)
             if new_val != val:
+                logger.info(f"Field '{field}' changed.")
                 setattr(meta, field, new_val)
                 meta_changed = True
 
     if meta_changed:
         save_metadata(game_id, meta)
-        logger.info(f"Updated metadata for {old_id} -> {new_id}")
+        logger.info(f"Saved refactored metadata for {game_id}")
 
     # 2. Update Script File (phase1.narrat)
     p = get_game_path(game_id, "phase1.narrat")
@@ -583,14 +589,16 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
         with open(p, "r") as f:
             content = f.read()
         
-        # Apply the same triple rename to the entire script file
+        # Apply the same smart rename to the entire script file
         # This covers labels, talk commands, jumps, and spoken dialogue
-        new_content = apply_triple_rename(content, old_id, new_id)
+        new_content = apply_smart_rename(content, old_id, new_id)
         
         if new_content != content:
             with open(p, "w") as f:
                 f.write(new_content)
-            logger.info(f"Refactored script content for {old_id} -> {new_id}")
+            logger.info(f"Successfully refactored script file: {p}")
+        else:
+            logger.warning(f"No changes made to script file {p} during rename!")
 
     # 3. Rename Reference Assets
     old_ref_dir = get_game_path(game_id, "reference", category)
