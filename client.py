@@ -6,8 +6,11 @@ import time
 import subprocess
 import re
 import questionary
+from prompt_toolkit.input import create_input
+from prompt_toolkit.keys import Keys
 from rich.console import Console
 from rich.panel import Panel
+from rich.live import Live
 from rich.prompt import Prompt
 from rich.markdown import Markdown
 from rich.layout import Layout
@@ -47,6 +50,28 @@ class Launcher:
     def __init__(self):
         self.show_script = True
 
+    def get_menu_choice(self, options, make_layout_func):
+        """Helper to run an interactive menu within a Rich Layout."""
+        idx = 0
+        input_obj = create_input()
+        
+        with Live(make_layout_func(options, idx), auto_refresh=False, screen=True) as live:
+            with input_obj.raw_mode():
+                while True:
+                    live.update(make_layout_func(options, idx))
+                    live.refresh()
+                    
+                    keys = input_obj.read_keys()
+                    for key in keys:
+                        if key.key == Keys.Up:
+                            idx = (idx - 1) % len(options)
+                        elif key.key == Keys.Down:
+                            idx = (idx + 1) % len(options)
+                        elif key.key == Keys.Enter:
+                            return options[idx]
+                        elif key.key == Keys.ControlC:
+                            sys.exit()
+
     def make_intro_layout(self) -> Layout:
         layout = Layout()
         layout.split_row(
@@ -55,7 +80,7 @@ class Launcher:
         )
         return layout
 
-    def display_intro(self):
+    def display_intro(self, options=None, selected_idx=0) -> Layout:
         layout = self.make_intro_layout()
         
         logo = r"""
@@ -79,29 +104,23 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
         
         layout["left"].update(Panel(Align.center(logo + description, vertical="middle"), border_style="cyan"))
         
-        options = "[bold yellow]Use Arrow Keys to Navigate[/bold yellow]\n\nSelect an option from the menu below."
-        layout["right"].update(Panel(Align.center(options, vertical="middle"), title="Menu", border_style="yellow"))
+        menu_text = ""
+        if options:
+            for i, opt in enumerate(options):
+                if i == selected_idx:
+                    menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
+                else:
+                    menu_text += f"  {opt}\n"
         
-        console.clear()
-        console.print(layout, height=console.height - 2)
+        layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Main Menu", border_style="yellow"))
+        return layout
 
     def run(self):
+        options = ["Create Game", "Select Game", "Options", "Exit"]
         while True:
-            self.display_intro()
-            choice = questionary.select(
-                "Main Menu",
-                choices=[
-                    "Create Game",
-                    "Select Game",
-                    "Options",
-                    "Exit"
-                ],
-                style=questionary.Style([
-                    ('selected', 'fg:yellow bold'),
-                ])
-            ).ask()
+            choice = self.get_menu_choice(options, self.display_intro)
             
-            if choice == "Exit" or choice is None:
+            if choice == "Exit":
                 console.print("[red]Exiting...[/red]")
                 sys.exit()
             elif choice == "Create Game":
@@ -217,34 +236,31 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
         
         self.game_hub(choice)
 
+    def render_game_hub(self, options, selected_idx, meta) -> Layout:
+        layout = self.make_intro_layout()
+        info = f"[bold cyan]{meta['title']}[/bold cyan]\n\n{meta['summary']}\n\n[dim]Genre: {meta['genre']}[/dim]\n[dim]Characters: {', '.join(meta['characters'])}[/dim]"
+        if meta.get("plot_outline"):
+            info += f"\n\n[bold white]Plot Outline:[/bold white]\n{meta['plot_outline'][:200]}..."
+        
+        layout["left"].update(Panel(Align.center(info, vertical="middle"), border_style="cyan"))
+        
+        menu_text = ""
+        for i, opt in enumerate(options):
+            if i == selected_idx:
+                menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
+            else:
+                menu_text += f"  {opt}\n"
+        
+        layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Game Hub", border_style="yellow"))
+        return layout
+
     def game_hub(self, game_id):
         while True:
             res = requests.get(f"{BASE_URL}/games/{game_id}/metadata")
             meta = res.json()
             
-            layout = self.make_intro_layout()
-            info = f"[bold cyan]{meta['title']}[/bold cyan]\n\n{meta['summary']}\n\n[dim]Genre: {meta['genre']}[/dim]\n[dim]Characters: {', '.join(meta['characters'])}[/dim]"
-            if meta.get("plot_outline"):
-                info += f"\n\n[bold white]Plot Outline:[/bold white]\n{meta['plot_outline'][:200]}..."
-            
-            layout["left"].update(Panel(Align.center(info, vertical="middle"), border_style="cyan"))
-            
-            options = "[bold yellow]Use Arrow Keys to Navigate[/bold yellow]\n\nManage your session or game assets."
-            layout["right"].update(Panel(Align.center(options, vertical="middle"), title="Game Hub", border_style="yellow"))
-            
-            console.clear()
-            console.print(layout, height=console.height - 2)
-            
-            choice = questionary.select(
-                f"Game Hub: {game_id}",
-                choices=[
-                    "Start New Game",
-                    "Load Game",
-                    "Manage Assets",
-                    "Edit Options",
-                    "Back"
-                ]
-            ).ask()
+            options = ["Start New Game", "Load Game", "Manage Assets", "Edit Options", "Back"]
+            choice = self.get_menu_choice(options, lambda opts, idx: self.render_game_hub(opts, idx, meta))
             
             if choice == "Back" or choice is None: return
             
