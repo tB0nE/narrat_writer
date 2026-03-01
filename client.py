@@ -695,24 +695,24 @@ class GameEngine:
                                     self.focus = "actions"
                         
                             elif key.key == Keys.Left:
-                            if self.focus == "actions":
-                                self.action_idx = (self.action_idx - 1) % len(self.actions)
+                                if self.focus == "actions":
+                                    self.action_idx = (self.action_idx - 1) % len(self.actions)
                         
-                        elif key.key == Keys.Right:
-                            if self.focus == "actions":
-                                self.action_idx = (self.action_idx + 1) % len(self.actions)
+                            elif key.key == Keys.Right:
+                                if self.focus == "actions":
+                                    self.action_idx = (self.action_idx + 1) % len(self.actions)
                         
-                        elif key.key == Keys.Up:
-                            if self.focus == "choices":
-                                options_count = len(self.data.get("options", {}))
-                                if options_count:
-                                    self.choice_idx = (self.choice_idx - 1) % options_count
+                            elif key.key == Keys.Up:
+                                if self.focus == "choices":
+                                    options_count = len(self.data.get("options", {}))
+                                    if options_count:
+                                        self.choice_idx = (self.choice_idx - 1) % options_count
                         
-                        elif key.key == Keys.Down:
-                            if self.focus == "choices":
-                                options_count = len(self.data.get("options", {}))
-                                if options_count:
-                                    self.choice_idx = (self.choice_idx + 1) % options_count
+                            elif key.key == Keys.Down:
+                                if self.focus == "choices":
+                                    options_count = len(self.data.get("options", {}))
+                                    if options_count:
+                                        self.choice_idx = (self.choice_idx + 1) % options_count
                         
                         elif key.key == Keys.Enter or key.key == Keys.ControlM:
                             if self.focus == "choices":
