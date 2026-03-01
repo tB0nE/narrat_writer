@@ -689,12 +689,12 @@ class GameEngine:
 
                         for key in keys:
                             if key.key == Keys.Tab:
-                            if self.data.get("type") == "choice":
-                                self.focus = "actions" if self.focus == "choices" else "choices"
-                            else:
-                                self.focus = "actions"
+                                if self.data.get("type") == "choice":
+                                    self.focus = "actions" if self.focus == "choices" else "choices"
+                                else:
+                                    self.focus = "actions"
                         
-                        elif key.key == Keys.Left:
+                            elif key.key == Keys.Left:
                             if self.focus == "actions":
                                 self.action_idx = (self.action_idx - 1) % len(self.actions)
                         
