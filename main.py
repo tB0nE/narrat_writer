@@ -539,11 +539,20 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
         raise HTTPException(status_code=404, detail="Game not found")
 
     # 1. Update Metadata (Characters list and all other text fields)
-    def replace_case_insensitive(text, old, new):
+    def replace_case_preserving(text, old, new):
         if not text: return text
-        return re.sub(rf'(\b){re.escape(old)}(\b)', lambda m: (new.capitalize() if m.group(0)[0].isupper() else new), text, flags=re.IGNORECASE)
+        
+        def preserve_case(match):
+            m = match.group(0)
+            if m.isupper(): return new.upper()
+            if m.istitle(): return new.capitalize()
+            return new.lower()
+            
+        return re.sub(rf'(\b){re.escape(old)}(\b)', preserve_case, text, flags=re.IGNORECASE)
 
     meta_changed = False
+    
+    # Update technical character list
     if category == "characters":
         new_char_list = []
         for c in meta.characters:
@@ -554,20 +563,19 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
                 new_char_list.append(c)
         meta.characters = new_char_list
 
-    # Update title, summary, plot_outline case-insensitively
-    new_title = replace_case_insensitive(meta.title, old_id, new_id)
-    if new_title != meta.title: meta.title = new_title; meta_changed = True
-    
-    new_summary = replace_case_insensitive(meta.summary, old_id, new_id)
-    if new_summary != meta.summary: meta.summary = new_summary; meta_changed = True
-    
-    if meta.plot_outline:
-        new_plot = replace_case_insensitive(meta.plot_outline, old_id, new_id)
-        if new_plot != meta.plot_outline: meta.plot_outline = new_plot; meta_changed = True
+    # Update all human-readable metadata fields
+    # We replace both the literal ID and potentially the human name if they differ (but IDs are usually the names here)
+    for field in ["title", "summary", "plot_outline"]:
+        val = getattr(meta, field)
+        if val:
+            new_val = replace_case_preserving(val, old_id, new_id)
+            if new_val != val:
+                setattr(meta, field, new_val)
+                meta_changed = True
 
     if meta_changed:
         save_metadata(game_id, meta)
-        logger.info(f"Updated metadata fields for {old_id} -> {new_id}")
+        logger.info(f"Updated metadata for {old_id} -> {new_id}")
 
     # 2. Update Script File (phase1.narrat) - Case Insensitive & Case Preserving Refactor
     p = get_game_path(game_id, "phase1.narrat")
@@ -575,22 +583,23 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
         with open(p, "r") as f:
             content = f.read()
         
-        # We want to replace technical commands specifically first
+        # 2a. Replace technical IDs in commands (always lowercase/exact ID)
         if category == "characters":
             content = re.sub(rf'(\btalk\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
             content = re.sub(rf'(\bset_expression\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
+            # Shortcut parser support: 'id "text"' at start of line
+            content = re.sub(rf'^(\s*){old_id}(\s+")', f'\\1{new_id}\\2', content, flags=re.MULTILINE | re.IGNORECASE)
         elif category == "backgrounds":
             content = re.sub(rf'(\bbackground\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
         elif category == "scenes":
             content = re.sub(rf'(\bscene\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
         
-        # Replace label definitions
+        # Ensure label definitions and jumps are also renamed
         content = re.sub(rf'^(\s*){old_id}:', f'\\1{new_id}:', content, flags=re.MULTILINE | re.IGNORECASE)
-        # Replace jump targets
         content = re.sub(rf'(\bjump\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
 
-        # Replace all other mentions (spoken names in dialogue, etc.) with case preservation
-        content = replace_case_insensitive(content, old_id, new_id)
+        # 2b. Replace all other mentions (spoken names in dialogue, descriptions) with CASE PRESERVATION
+        content = replace_case_preserving(content, old_id, new_id)
         
         with open(p, "w") as f:
             f.write(content)
