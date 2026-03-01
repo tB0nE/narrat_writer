@@ -48,8 +48,10 @@ def ensure_server_running():
 # --- LAUNCHER UI ---
 
 class Launcher:
-    def __init__(self):
+    def __init__(self, custom_console=None, base_url=None):
         self.show_script = True
+        self.console = custom_console or console
+        self.base_url = base_url or BASE_URL
 
     def get_menu_choice(self, options, make_layout_func):
         """Helper to run an interactive menu within a Rich Layout."""
@@ -528,7 +530,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
 # --- GAME ENGINE ---
 
 class GameEngine:
-    def __init__(self, game_id, session_id):
+    def __init__(self, game_id, session_id, custom_console=None, base_url=None):
         self.game_id = game_id
         self.session_id = session_id
         self.show_script = True
@@ -537,6 +539,8 @@ class GameEngine:
         self.action_idx = 0
         self.choice_idx = 0
         self.actions = ["Next", "View Script", "Reload", "Back", "Edit", "Exit"]
+        self.console = custom_console or console
+        self.base_url = base_url or BASE_URL
 
     def get_actions_row(self):
         """Renders the horizontal action menu."""
