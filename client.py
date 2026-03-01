@@ -237,6 +237,28 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                 console.print(f"[red]Error: {res.json().get('detail', 'Unknown error')}[/red]")
                 questionary.text("[Enter] to continue").ask()
 
+    def render_select_game(self, options, selected_idx, games) -> Layout:
+        """Renders the game selection screen with a dynamic preview of the highlighted game."""
+        layout = self.make_intro_layout()
+        
+        if selected_idx < len(games):
+            g = games[selected_idx]
+            info = f"[bold cyan]{g['title']}[/bold cyan]\n\n{g['summary']}"
+        else:
+            info = "[dim]Go back to the main menu.[/dim]"
+            
+        layout["left"].update(Panel(Align.center(info, vertical="middle"), title="Game Preview", border_style="cyan"))
+        
+        menu_text = ""
+        for i, opt in enumerate(options):
+            if i == selected_idx:
+                menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
+            else:
+                menu_text += f"  {opt}\n"
+        
+        layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Select Game", border_style="yellow"))
+        return layout
+
     def select_game_flow(self):
         res = requests.get(f"{BASE_URL}/games")
         games = res.json()["games"]
@@ -246,22 +268,10 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
             questionary.text("[Enter] to continue").ask()
             return
 
-        table = Table(title="Available Games")
-        table.add_column("ID", style="cyan")
-        table.add_column("Title", style="bold white")
-        table.add_column("Summary", style="dim")
-        
-        for g in games:
-            table.add_row(g["id"], g["title"], g["summary"][:50] + "...")
-        
-        console.clear()
-        console.print(table)
-        
         game_ids = [g["id"] for g in games]
-        choice = questionary.select(
-            "Select Game ID",
-            choices=game_ids + [questionary.Separator(), "Back"]
-        ).ask()
+        options = game_ids + ["Back"]
+        
+        choice = self.get_menu_choice(options, lambda opts, idx: self.render_select_game(opts, idx, games))
         
         if choice == "Back" or choice is None: return
         
