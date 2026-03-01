@@ -77,6 +77,7 @@ class Launcher:
                             sys.exit()
 
     def make_intro_layout(self) -> Layout:
+        """Creates the primary 70/30 split layout used by the Launcher and Game Hub."""
         layout = Layout()
         layout.split_row(
             Layout(name="left", ratio=7),
@@ -85,6 +86,7 @@ class Launcher:
         return layout
 
     def display_intro(self, options=None, selected_idx=0) -> Layout:
+        """Renders the main splash screen with centered logo and interactive menu panel."""
         layout = self.make_intro_layout()
         
         # Define the logo lines without trailing whitespace to ensure proper centering
@@ -130,6 +132,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
         # Center the entire group vertically and horizontally in the panel
         layout["left"].update(Panel(Align.center(intro_content, vertical="middle"), border_style="cyan"))
         
+        # Build the menu text with highlighting for the selected item
         menu_text = ""
         if options:
             for i, opt in enumerate(options):
@@ -142,6 +145,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
         return layout
 
     def run(self):
+        """Primary Launcher loop handling top-level navigation."""
         options = ["Create Game", "Select Game", "Options", "Exit"]
         while True:
             choice = self.get_menu_choice(options, self.display_intro)
