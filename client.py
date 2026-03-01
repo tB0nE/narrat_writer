@@ -19,7 +19,7 @@ from rich.text import Text
 from rich.align import Align
 
 console = Console()
-BASE_URL = "http://localhost:8046"
+BASE_URL = "http://localhost:8045"
 
 def ensure_server_running():
     """Checks if server is up, starts it if not."""
