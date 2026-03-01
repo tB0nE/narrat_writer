@@ -25,6 +25,6 @@
 - [x] Dedicated UI to view/edit `metadata.json` with 70/30 split.
 - [x] Buttons to "Regenerate" specific sections using the AI.
 
-## Phase 5: Polish
-- [ ] Standardize shortcuts across Launcher and Game Engine.
-- [ ] Ensure `python client.py [game_id]` still bypasses launcher for power users.
+## Phase 5: Polish - [x] Completed
+- [x] Standardize shortcuts across Launcher and Game Engine. (Replaced by Arrow Menus)
+- [x] Ensure `python client.py [game_id]` still bypasses launcher for power users.

@@ -22,5 +22,5 @@
 - [x] **Save Management**: List and delete saves from the Launcher.
 - [x] **Variable Evaluation**: Robust expression parsing for `if` statements.
 - [x] **Animation/Scene Triggers**: Basic handling for placeholders in the terminal.
-- [ ] **Shortcut Standardization**: Ensure consistent controls across all screens.
-- [ ] **Direct Launch**: Allow bypassing the launcher for power users.
+- [x] **Shortcut Standardization**: Replaced by arrow-key menus.
+- [x] **Direct Launch**: Supported via CLI arguments.
