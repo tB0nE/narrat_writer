@@ -714,29 +714,29 @@ class GameEngine:
                                     if options_count:
                                         self.choice_idx = (self.choice_idx + 1) % options_count
                         
-                        elif key.key == Keys.Enter or key.key == Keys.ControlM:
-                            if self.focus == "choices":
-                                opt_keys = list(self.data["options"].keys())
-                                cmd = opt_keys[self.choice_idx]
-                                self.focus = "actions"
-                                self.choice_idx = 0
-                            else:
-                                action = self.actions[self.action_idx]
-                                if action == "Next": cmd = " "
-                                elif action == "View Script": 
-                                    self.show_script = not self.show_script
-                                    live.update(self.display_game())
-                                    live.refresh()
-                                    continue
-                                elif action == "Reload": cmd = "R"
-                                elif action == "Back": cmd = "B"
-                                elif action == "Edit":
-                                    # Signal that we need to break out of Live to run edit
-                                    cmd = "DO_EDIT"
-                                elif action == "Exit": return
+                            elif key.key == Keys.Enter or key.key == Keys.ControlM:
+                                if self.focus == "choices":
+                                    opt_keys = list(self.data["options"].keys())
+                                    cmd = opt_keys[self.choice_idx]
+                                    self.focus = "actions"
+                                    self.choice_idx = 0
+                                else:
+                                    action = self.actions[self.action_idx]
+                                    if action == "Next": cmd = " "
+                                    elif action == "View Script": 
+                                        self.show_script = not self.show_script
+                                        live.update(self.display_game())
+                                        live.refresh()
+                                        continue
+                                    elif action == "Reload": cmd = "R"
+                                    elif action == "Back": cmd = "B"
+                                    elif action == "Edit":
+                                        # Signal that we need to break out of Live to run edit
+                                        cmd = "DO_EDIT"
+                                    elif action == "Exit": return
 
-                        elif key.key == Keys.ControlC:
-                            return
+                            elif key.key == Keys.ControlC:
+                                return
 
                 # --- EXIT LIVE CONTEXT FOR BLOCKING SUB-PROMPTS ---
             

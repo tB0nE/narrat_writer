@@ -7,3 +7,4 @@ pytest
 httpx
 questionary
 prompt_toolkit
+pexpect
