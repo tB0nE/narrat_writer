@@ -123,6 +123,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
         # Group both elements and center them individually within the group's container
         intro_content = Group(
             Align.center(logo_text),
+            Text("\n"), # Added two-line margin
             Align.center(Text.from_markup(description.strip()))
         )
         
