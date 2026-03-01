@@ -8,7 +8,7 @@ import re
 import questionary
 from prompt_toolkit.input import create_input
 from prompt_toolkit.keys import Keys
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.live import Live
 from rich.prompt import Prompt
@@ -87,29 +87,29 @@ class Launcher:
     def display_intro(self, options=None, selected_idx=0) -> Layout:
         layout = self.make_intro_layout()
         
-        # Center each line of the ASCII logo individually for perfect alignment
-        logo_raw = [
-            "      ███████              ███████       ",
-            "    ████████████        ████████████     ",
-            "   ██████████████      ██████████████    ",
-            "  ████████████████████████████████████   ",
-            "  ████████████████████████████████████   ",
-            "  ████████████████████████████████████   ",
-            "   ██████████████████████████████████    ",
-            "     ██████████████████████████████      ",
-            "         ██████████████████████          ",
-            "         ██████████████████████          ",
-            "          █        ██        █           ",
-            "          ████████████████████           ",
-            "           ██████████████████            ",
-            "            ████████████████             ",
-            "          ██ ██████████████ ██           ",
-            "              ████████████               ",
-            "               ███    ███                ",
-            "             ██  ██  ██  ██              ",
-            "                  ████                   "
+        # Define the logo lines without trailing whitespace to ensure proper centering
+        logo_lines = [
+            "      ███████              ███████",
+            "    ████████████        ████████████",
+            "   ██████████████      ██████████████",
+            "  ████████████████████████████████████",
+            "  ████████████████████████████████████",
+            "  ████████████████████████████████████",
+            "   ██████████████████████████████████",
+            "     ██████████████████████████████",
+            "         ██████████████████████",
+            "         ██████████████████████",
+            "          █        ██        █",
+            "          ████████████████████",
+            "           ██████████████████",
+            "            ████████████████",
+            "          ██ ██████████████ ██",
+            "              ████████████",
+            "               ███    ███",
+            "             ██  ██  ██  ██",
+            "                  ████"
         ]
-        logo_formatted = "\n".join([f"[red]{line}[/red]" for line in logo_raw])
+        logo_text = Text("\n".join(logo_lines), style="red")
         
         description = """
 [bold white]Narrat Writer[/bold white]
@@ -120,7 +120,14 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
 [dim]Version 0.2.0[/dim]
         """
         
-        layout["left"].update(Panel(Align.center(logo_formatted + description, vertical="middle"), border_style="cyan"))
+        # Group both elements and center them individually within the group's container
+        intro_content = Group(
+            Align.center(logo_text),
+            Align.center(Text.from_markup(description.strip()))
+        )
+        
+        # Center the entire group vertically and horizontally in the panel
+        layout["left"].update(Panel(Align.center(intro_content, vertical="middle"), border_style="cyan"))
         
         menu_text = ""
         if options:
