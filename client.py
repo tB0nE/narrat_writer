@@ -89,7 +89,8 @@ class Launcher:
         """Renders the main splash screen with centered logo and interactive menu panel."""
         layout = self.make_intro_layout()
         
-        # Define the logo lines without trailing whitespace to ensure proper centering
+        # Define the logo lines (User finalized version) without trailing whitespace 
+        # to ensure proper grouping and centering in the layout.
         logo_lines = [
             "        █████████              █████████",
             "      ██████████████        ██████████████",
