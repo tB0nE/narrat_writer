@@ -539,16 +539,17 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
         raise HTTPException(status_code=404, detail="Game not found")
 
     # 1. Update Metadata (Characters list and all other text fields)
-    def replace_case_preserving(text, old, new):
+    def apply_triple_rename(text, old, new):
         if not text: return text
-        
-        def preserve_case(match):
-            m = match.group(0)
-            if m.isupper(): return new.upper()
-            if m.istitle(): return new.capitalize()
-            return new.lower()
-            
-        return re.sub(rf'(\b){re.escape(old)}(\b)', preserve_case, text, flags=re.IGNORECASE)
+        # Pass 1: exact match (often catches technical IDs)
+        text = re.sub(rf'\b{old}\b', new, text)
+        # Pass 2: Lowercase
+        text = re.sub(rf'\b{old.lower()}\b', new.lower(), text)
+        # Pass 3: Titlecase / Capitalized
+        text = re.sub(rf'\b{old.capitalize()}\b', new.capitalize(), text)
+        # Pass 4: Uppercase
+        text = re.sub(rf'\b{old.upper()}\b', new.upper(), text)
+        return text
 
     meta_changed = False
     
@@ -564,11 +565,10 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
         meta.characters = new_char_list
 
     # Update all human-readable metadata fields
-    # We replace both the literal ID and potentially the human name if they differ (but IDs are usually the names here)
     for field in ["title", "summary", "plot_outline"]:
         val = getattr(meta, field)
         if val:
-            new_val = replace_case_preserving(val, old_id, new_id)
+            new_val = apply_triple_rename(val, old_id, new_id)
             if new_val != val:
                 setattr(meta, field, new_val)
                 meta_changed = True
@@ -577,33 +577,20 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
         save_metadata(game_id, meta)
         logger.info(f"Updated metadata for {old_id} -> {new_id}")
 
-    # 2. Update Script File (phase1.narrat) - Case Insensitive & Case Preserving Refactor
+    # 2. Update Script File (phase1.narrat)
     p = get_game_path(game_id, "phase1.narrat")
     if os.path.exists(p):
         with open(p, "r") as f:
             content = f.read()
         
-        # 2a. Replace technical IDs in commands (always lowercase/exact ID)
-        if category == "characters":
-            content = re.sub(rf'(\btalk\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
-            content = re.sub(rf'(\bset_expression\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
-            # Shortcut parser support: 'id "text"' at start of line
-            content = re.sub(rf'^(\s*){old_id}(\s+")', f'\\1{new_id}\\2', content, flags=re.MULTILINE | re.IGNORECASE)
-        elif category == "backgrounds":
-            content = re.sub(rf'(\bbackground\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
-        elif category == "scenes":
-            content = re.sub(rf'(\bscene\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
+        # Apply the same triple rename to the entire script file
+        # This covers labels, talk commands, jumps, and spoken dialogue
+        new_content = apply_triple_rename(content, old_id, new_id)
         
-        # Ensure label definitions and jumps are also renamed
-        content = re.sub(rf'^(\s*){old_id}:', f'\\1{new_id}:', content, flags=re.MULTILINE | re.IGNORECASE)
-        content = re.sub(rf'(\bjump\s+){old_id}(\b)', f'\\1{new_id}\\2', content, flags=re.IGNORECASE)
-
-        # 2b. Replace all other mentions (spoken names in dialogue, descriptions) with CASE PRESERVATION
-        content = replace_case_preserving(content, old_id, new_id)
-        
-        with open(p, "w") as f:
-            f.write(content)
-        logger.info(f"Refactored script content for {old_id} -> {new_id}")
+        if new_content != content:
+            with open(p, "w") as f:
+                f.write(new_content)
+            logger.info(f"Refactored script content for {old_id} -> {new_id}")
 
     # 3. Rename Reference Assets
     old_ref_dir = get_game_path(game_id, "reference", category)
