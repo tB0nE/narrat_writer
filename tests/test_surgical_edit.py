@@ -4,7 +4,7 @@ import os
 @pytest.fixture
 def edit_game(client):
     game_id = "edit_test_game"
-    client.post("/games/create", json={"name": game_id, "manual_data": {"title": "Edit Test", "summary": "...", "genre": "Test"}})
+    client.post("/games/create", json={"name": game_id, "manual_data": {"title": "Edit Test", "summary": "...", "genre": "Test", "characters": ["anya"]}})
     return game_id
 
 def test_script_surgical_update(client, edit_game):
@@ -44,4 +44,8 @@ def test_character_metadata_update(client, edit_game):
     payload = {"category": "reference", "action": "update", "sub_category": "character", "target": "anya", "content": "Hacker.", "meta": {"type": "profile"}}
     client.post(f"/games/{edit_game}/sessions/any/edit", json=payload)
     path = os.path.join("test_games_tmp", edit_game, "reference", "characters", "anya", "anya_profile.txt")
+    if not os.path.exists(path):
+        import subprocess
+        print("\nDEBUG: File not found. Listing all files in test_games_tmp:")
+        subprocess.run(["find", "test_games_tmp", "-type", "f"])
     with open(path, "r") as f: assert f.read() == "Hacker."

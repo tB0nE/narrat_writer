@@ -1,5 +1,5 @@
 import pytest
-from terminal_client import Launcher
+from src.terminal_client.screens.launcher import Launcher
 from rich.console import Console
 from unittest.mock import MagicMock
 import os
@@ -10,7 +10,7 @@ def test_intro_screen_visual_snapshot():
     recording_console = Console(width=100, height=30, record=True, color_system="truecolor")
     
     # We need to temporarily patch the global 'console' in terminal_client.py
-    import terminal_client
+    import src.terminal_client.utils as terminal_client
     original_console = terminal_client.console
     terminal_client.console = recording_console
     

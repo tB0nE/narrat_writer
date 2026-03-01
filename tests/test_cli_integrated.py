@@ -1,7 +1,8 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from rich.console import Console
-from terminal_client import Launcher, GameEngine
+from src.terminal_client.screens.launcher import Launcher
+from src.terminal_client.screens.engine import GameEngine
 
 @pytest.fixture
 def test_console():
@@ -24,7 +25,8 @@ def test_launcher_rendering(test_console):
     print("Launcher intro rendering verified.")
 
 def test_game_hub_rendering(test_console):
-    launcher = Launcher(custom_console=test_console)
+    from src.terminal_client.screens.hub import GameHub
+    hub = GameHub(custom_console=test_console, base_url="http://localhost:8045")
     meta = {
         "title": "Cyberpunk Adventure",
         "summary": "A neon story.",
@@ -33,7 +35,7 @@ def test_game_hub_rendering(test_console):
     }
     
     # Render hub
-    layout = launcher.render_game_hub(["Start", "Back"], 0, meta)
+    layout = hub.render_game_hub(["Start", "Back"], 0, meta)
     test_console.print(layout)
     text = test_console.export_text()
     
@@ -44,6 +46,7 @@ def test_game_hub_rendering(test_console):
     print("Game Hub rendering verified.")
 
 def test_game_engine_choice_rendering(test_console):
+    from src.terminal_client.screens.engine import GameEngine
     engine = GameEngine("test", "sess", custom_console=test_console)
     engine.data = {
         "type": "choice",
@@ -64,7 +67,8 @@ def test_game_engine_choice_rendering(test_console):
     print("Game Engine choice rendering verified.")
 
 def test_save_manager_rendering(test_console):
-    launcher = Launcher(custom_console=test_console)
+    from src.terminal_client.screens.hub import GameHub
+    hub = GameHub(custom_console=test_console, base_url="http://localhost:8045")
     saves = [{
         "id": "autosave",
         "timestamp": 1700000000,
@@ -72,7 +76,7 @@ def test_save_manager_rendering(test_console):
         "last_text": "The end?"
     }]
     
-    layout = launcher.render_save_manager(["autosave", "Back"], 0, saves)
+    layout = hub.render_save_manager(["autosave", "Back"], 0, saves)
     test_console.print(layout)
     text = test_console.export_text()
     
