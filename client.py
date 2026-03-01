@@ -53,6 +53,12 @@ class Launcher:
 
     def get_menu_choice(self, options, make_layout_func):
         """Helper to run an interactive menu within a Rich Layout."""
+        # --- TEST MODE BYPASS ---
+        if os.getenv("NARRAT_TEST_MODE") == "1":
+            # Just print the layout once and use standard questionary
+            console.print(make_layout_func(options, 0))
+            return questionary.select("Menu", choices=options).ask()
+
         idx = 0
         input_obj = create_input()
         
@@ -811,6 +817,16 @@ class GameEngine:
         res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
         self.data = res.json()
         
+        # --- TEST MODE BYPASS ---
+        if os.getenv("NARRAT_TEST_MODE") == "1":
+            while True:
+                console.print(self.display_game())
+                if self.data["type"] == "end": return
+                # Simple linear flow for testing
+                res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
+                self.data = res.json()
+            return
+
         input_obj = create_input()
         
         while True:
