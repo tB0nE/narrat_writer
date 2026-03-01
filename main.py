@@ -540,6 +540,13 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
 
     # 1. Update Metadata (Characters list and all other text fields)
     def apply_smart_rename(text, old, new):
+        """
+        Performs a case-preserving global replacement.
+        e.g. if 'old' is 'sara' and 'new' is 'sarah':
+        'sara' -> 'sarah'
+        'Sara' -> 'Sarah'
+        'SARA' -> 'SARAH'
+        """
         if not text: return text
         
         def preserve_case(match):
@@ -548,6 +555,7 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
             if m.istitle(): return new.capitalize()
             return new.lower()
             
+        # Use word boundaries (\b) to ensure we don't replace parts of other words
         return re.sub(rf'\b{re.escape(old)}\b', preserve_case, text, flags=re.IGNORECASE)
 
     meta_changed = False
