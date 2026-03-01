@@ -650,7 +650,7 @@ class GameEngine:
                 new_name = questionary.text(f"Enter new global ID for {char} (no spaces)").ask()
                 if new_name:
                     with console.status(f"[bold yellow]Refactoring {char} to {new_name}...[/bold yellow]"):
-                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/characters/rename", json={"old_id": char, "new_id": new_name})
+                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/assets/rename", json={"category": "characters", "old_id": char, "new_id": new_name})
                     if res.status_code == 200:
                         console.print(f"[green]Successfully renamed {char} to {new_name} across all files![/green]")
                         self.data["character"] = new_name
