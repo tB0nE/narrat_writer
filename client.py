@@ -423,6 +423,33 @@ class GameEngine:
         self.session_id = session_id
         self.show_script = True
         self.data = {}
+        self.focus = "actions" # "actions" or "choices"
+        self.action_idx = 0
+        self.choice_idx = 0
+        self.actions = ["Next", "View Script", "Reload", "Back", "Edit", "Exit"]
+
+    def get_actions_row(self):
+        """Renders the horizontal action menu."""
+        parts = []
+        for i, act in enumerate(self.actions):
+            style = "bold yellow reverse" if (self.focus == "actions" and i == self.action_idx) else "dim"
+            parts.append(f"[{style}]{act}[/{style}]")
+        return "  ".join(parts)
+
+    def get_choices_list(self):
+        """Renders the vertical story choices."""
+        if self.data.get("type") != "choice":
+            return ""
+        
+        lines = []
+        options = self.data.get("options", {})
+        for i, (idx, opt) in enumerate(options.items()):
+            text = opt['text']
+            if self.focus == "choices" and i == self.choice_idx:
+                lines.append(f"> [bold yellow]{text}[/bold yellow]")
+            else:
+                lines.append(f"  {text}")
+        return "\n".join(lines)
 
     def get_descriptions_panel(self):
         anim = self.data.get("active_animation")
@@ -514,7 +541,7 @@ class GameEngine:
         
         return Panel(table, title=f"Script: {self.game_id}/phase1.narrat", border_style="white", padding=(1, 1))
 
-    def display_game(self):
+    def display_game(self) -> Layout:
         layout = Layout()
         if self.show_script:
             layout.split_row(Layout(name="main", ratio=7), Layout(name="script", ratio=3))
@@ -536,16 +563,22 @@ class GameEngine:
         pad = "\n" * max(0, box_h - sum(len(l.split("\n")) + 1 for l in lines) - 1)
         main["diag"].update(Panel(pad + "\n\n".join(lines), title="Dialogue", border_style="cyan"))
 
-        sys_msg = ""
-        if self.data["type"] == "missing_label": sys_msg = f"\n[bold red]System: Label '{self.data['meta']['target']}' is missing![/bold red]"
-        elif self.data["type"] == "choice":
-            sys_msg = "\n" + "\n".join(f"  {i}. {o['text']}" for i, o in self.data["options"].items())
-        elif self.data["type"] == "end": sys_msg = f"\n[bold red]{self.data['text']}[/bold red]"
-        main["low"].update(Panel(sys_msg, title="System / Choices", border_style="yellow"))
+        # Footer Area
+        footer_content = ""
+        if self.data.get("type") == "missing_label":
+            footer_content = f"\n[bold red]Label '{self.data['meta']['target']}' is missing![/bold red]\n"
+            # Note: We'll handle special prompts for this in run()
+        elif self.data.get("type") == "choice":
+            footer_content = self.get_choices_list()
+        elif self.data.get("type") == "end":
+            footer_content = f"\n[bold red]End of Script.[/bold red]"
+
+        main["low"].split_column(
+            Layout(Panel(footer_content, title="System / Choices", border_style="yellow"), ratio=70),
+            Layout(Align.center(self.get_actions_row()), ratio=30)
+        )
         
-        console.clear()
-        console.print("\n")
-        console.print(layout, height=console.height - 3)
+        return layout
 
     def handle_edit(self):
         p = f"games/{self.game_id}/phase1.narrat"
@@ -634,79 +667,110 @@ class GameEngine:
     def run(self):
         res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
         self.data = res.json()
-        while True:
-            self.display_game()
-            
-            if self.data["type"] == "end":
-                choice = questionary.select(
-                    "End of Script.",
-                    choices=["Generate More", "Restart", "Exit"]
-                ).ask()
-                
-                if choice == "Generate More":
-                    with console.status("[bold green]AI is writing more...[/bold green]"):
-                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/continue")
-                    if res.status_code == 200:
-                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
-                        self.data = res.json()
-                        continue
-                    else:
-                        console.print(f"[red]Error: {res.json().get('detail')}[/red]")
-                        Prompt.ask("[Enter] to continue")
-                        continue
-                elif choice == "Restart":
-                    res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
-                    self.data = res.json()
-                    continue
-                else:
-                    break
+        
+        input_obj = create_input()
+        
+        with Live(self.display_game(), auto_refresh=False, screen=True) as live:
+            with input_obj.raw_mode():
+                while True:
+                    live.update(self.display_game())
+                    live.refresh()
+                    
+                    # Handle special blocking prompts outside the standard loop if needed
+                    # But for now we integrate them.
+                    
+                    keys = input_obj.read_keys()
+                    for key in keys:
+                        if key.key == Keys.Tab:
+                            if self.data.get("type") == "choice":
+                                self.focus = "actions" if self.focus == "choices" else "choices"
+                            else:
+                                self.focus = "actions" # Can't focus choices if there are none
+                        
+                        elif key.key == Keys.Left:
+                            if self.focus == "actions":
+                                self.action_idx = (self.action_idx - 1) % len(self.actions)
+                        
+                        elif key.key == Keys.Right:
+                            if self.focus == "actions":
+                                self.action_idx = (self.action_idx + 1) % len(self.actions)
+                        
+                        elif key.key == Keys.Up:
+                            if self.focus == "choices":
+                                options_count = len(self.data.get("options", {}))
+                                if options_count:
+                                    self.choice_idx = (self.choice_idx - 1) % options_count
+                        
+                        elif key.key == Keys.Down:
+                            if self.focus == "choices":
+                                options_count = len(self.data.get("options", {}))
+                                if options_count:
+                                    self.choice_idx = (self.choice_idx + 1) % options_count
+                        
+                        elif key.key == Keys.Enter:
+                            cmd = None
+                            if self.focus == "choices":
+                                # Extract real ID from the options dict
+                                opt_keys = list(self.data["options"].keys())
+                                cmd = opt_keys[self.choice_idx]
+                                # After a choice, always refocus actions for 'Next'
+                                self.focus = "actions"
+                                self.choice_idx = 0
+                            else:
+                                action = self.actions[self.action_idx]
+                                if action == "Next": cmd = " "
+                                elif action == "View Script": 
+                                    self.show_script = not self.show_script
+                                    continue
+                                elif action == "Reload": cmd = "R"
+                                elif action == "Back": cmd = "B"
+                                elif action == "Edit":
+                                    # We need to drop out of Live briefly for Prompt.ask inside handle_edit
+                                    # Actually Live screen=True makes this tricky.
+                                    # For now, let's just do it.
+                                    live.stop()
+                                    self.handle_edit()
+                                    live.start()
+                                    cmd = "REFRESH"
+                                elif action == "Exit": return
 
-            if self.data["type"] == "missing_label":
-                choice = questionary.select(
-                    f"Label '{self.data['meta']['target']}' is missing!",
-                    choices=["Generate with AI", "Back (Undo)"]
-                ).ask()
-                
-                if choice == "Generate with AI":
-                    with console.status("Generating..."): requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/generate", json={"target": self.data["meta"]["target"]})
-                    cmd = "R"
-                else: cmd = "B"
-            elif self.data["type"] == "choice":
-                options = [f"{i}. {o['text']}" for i, o in self.data["options"].items()]
-                choice_text = questionary.select(
-                    "Make a Choice",
-                    choices=options + [questionary.Separator(), "View Script", "Reload", "Back", "Edit", "Exit"]
-                ).ask()
-                
-                if choice_text is None: break
-                
-                if choice_text == "View Script": cmd = "V"
-                elif choice_text == "Reload": cmd = "R"
-                elif choice_text == "Back": cmd = "B"
-                elif choice_text == "Edit": cmd = "E"
-                elif choice_text == "Exit": break
-                else:
-                    # Extract index from "1. Text"
-                    cmd = choice_text.split(".")[0]
-            else:
-                cmd = questionary.select(
-                    "Action",
-                    choices=["Next", "View Script", "Reload", "Back", "Edit", "Exit"],
-                    use_shortcuts=True
-                ).ask()
-                
-                if cmd is None or cmd == "Exit": break
-                if cmd == "Next": cmd = " "
-                elif cmd == "View Script": cmd = "V"
-                elif cmd == "Reload": cmd = "R"
-                elif cmd == "Back": cmd = "B"
-                elif cmd == "Edit": cmd = "E"
-            
-            if cmd.upper() == "V": self.show_script = not self.show_script; continue
-            if cmd.upper() == "E": self.handle_edit(); cmd = "REFRESH"
-            
-            res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": cmd.upper() if cmd else " "})
-            self.data = res.json()
+                            if cmd is not None:
+                                res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": str(cmd)})
+                                self.data = res.json()
+                                # If we hit a choice, auto-focus it
+                                if self.data.get("type") == "choice":
+                                    self.focus = "choices"
+                                    self.choice_idx = 0
+                                
+                                # Handle End/Missing cases by hijacking the actions or showing unique UI
+                                if self.data.get("type") == "end":
+                                    live.stop()
+                                    c = questionary.select("End of Script.", choices=["Generate More", "Restart", "Exit"]).ask()
+                                    if c == "Generate More":
+                                        requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/continue")
+                                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
+                                        self.data = res.json()
+                                        live.start()
+                                    elif c == "Restart":
+                                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
+                                        self.data = res.json()
+                                        live.start()
+                                    else:
+                                        return
+                                
+                                if self.data.get("type") == "missing_label":
+                                    live.stop()
+                                    c = questionary.select(f"Label '{self.data['meta']['target']}' is missing!", choices=["Generate with AI", "Back (Undo)"]).ask()
+                                    if c == "Generate with AI":
+                                        requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/generate", json={"target": self.data["meta"]["target"]})
+                                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
+                                    else:
+                                        res = requests.post(f"{BASE_URL}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "B"})
+                                    self.data = res.json()
+                                    live.start()
+
+                        elif key.key == Keys.ControlC:
+                            return
 
 # --- MAIN ---
 
