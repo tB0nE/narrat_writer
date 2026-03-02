@@ -1,9 +1,14 @@
 import sys
 import os
 import signal
+from dotenv import load_dotenv
 from src.terminal_client.utils import ensure_server_running, console
 from src.terminal_client.screens.launcher import Launcher
 from src.terminal_client.screens.engine import GameEngine
+
+# Load environment variables (e.g., EDITOR, API_URL)
+load_dotenv(override=True)
+
 
 def main():
     # Ensure server is up (launches server.py if needed)

@@ -11,7 +11,7 @@ from rich.text import Text
 from rich.align import Align
 from prompt_toolkit.input import create_input
 from prompt_toolkit.keys import Keys
-from src.terminal_client.utils import console, BASE_URL
+from src.terminal_client.utils import console, BASE_URL, open_in_external_editor
 
 class GameEngine:
     def __init__(self, game_id, session_id, custom_console=None, base_url=None):
@@ -201,12 +201,22 @@ class GameEngine:
             if re.match(rf"^(?:label\s+)?{self.data['current_label']}:\s*(?://.*)?$", line.strip()):
                 idx = i + self.data.get("line_index", 0); break
         if idx == -1: return
-        et = questionary.select("Edit?", choices=["Background", "Character", "Dialogue", "Choice", "Scene", "Back"]).ask()
+        et = questionary.select("Edit?", choices=["Background", "Character", "Dialogue", "Choice", "Scene", "Open in External Editor", "Back"]).ask()
         if et == "Back" or et is None: return
+        
+        if et == "Open in External Editor":
+            open_in_external_editor(f"games/{self.game_id}/phase1.narrat", idx + 1)
+            return
+
         if et == "Dialogue":
-            action = questionary.select("Action", choices=["Edit Manually", "Rewrite with AI", "Back"]).ask()
+            action = questionary.select("Action", choices=["Edit Manually", "Edit in External Editor", "Rewrite with AI", "Back"]).ask()
             if action == "Edit Manually":
                 nt = questionary.text("New Text").ask()
+                if nt: requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "script", "action": "update", "target": str(idx), "content": f"talk {self.data.get('character', 'narrator')} \"{nt}\""})
+            elif action == "Edit in External Editor":
+                from src.terminal_client.utils import edit_text_in_external_editor
+                initial_text = self.data.get('text', '')
+                nt = edit_text_in_external_editor(initial_text)
                 if nt: requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "script", "action": "update", "target": str(idx), "content": f"talk {self.data.get('character', 'narrator')} \"{nt}\""})
             elif action == "Rewrite with AI":
                 instr = questionary.text("Instruction?").ask()

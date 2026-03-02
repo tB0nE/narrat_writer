@@ -8,7 +8,7 @@ def test_launcher_navigation_logic():
     # Mock dependencies
     with patch('src.terminal_client.screens.launcher.requests.get') as mock_get, \
          patch('src.terminal_client.screens.launcher.questionary.select') as mock_select, \
-         patch('src.terminal_client.screens.launcher.get_menu_choice') as mock_menu:
+         patch('src.terminal_client.utils.get_menu_choice') as mock_menu:
         
         # 1. Simulate selecting 'Exit' immediately
         mock_menu.return_value = "Exit"
