@@ -3,6 +3,7 @@ import json
 import re
 import shutil
 import logging
+import requests as sync_requests
 from fastapi import FastAPI, HTTPException
 from typing import Dict, List, Optional, Any
 
@@ -146,18 +147,89 @@ async def process_current_step(game_id: str, state: SessionState, parser: Narrat
 
 @app.get("/config")
 async def get_api_config():
-    from src.server.ai import API_URL, API_MODEL, API_KEY
     return {
-        "api_url": API_URL,
-        "model": API_MODEL,
-        "narrat_mode": NARRAT_MODE,
-        "global_prompt_prefix": os.getenv("GLOBAL_PROMPT_PREFIX", "")
+        "api_url": os.getenv("API_URL", ""),
+        "model": os.getenv("API_MODEL", ""),
+        "api_key": os.getenv("API_KEY", ""),
+        "narrat_mode": os.getenv("NARRAT_MODE", "writer"),
+        "global_prompt_prefix": os.getenv("GLOBAL_PROMPT_PREFIX", ""),
+        "editor": os.getenv("EDITOR", "vim")
     }
+
+@app.post("/config/test")
+async def test_api_config(req: Dict[str, str]):
+    url, key = req.get("api_url"), req.get("api_key")
+    if not url or not key:
+        raise HTTPException(status_code=400, detail="Missing URL or Key")
+    
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    # Standard OpenAI-style models endpoint check
+    models_url = url.replace("/chat/completions", "/models")
+    try:
+        res = sync_requests.get(models_url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            models = [m["id"] for m in res.json().get("data", [])]
+            return {"status": "success", "models": models}
+        # Fallback to a simple chat completion test if /models fails
+        test_payload = {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5}
+        res = sync_requests.post(url, json=test_payload, headers=headers, timeout=10)
+        res.raise_for_status()
+        return {"status": "success", "models": []}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/config/models")
+async def get_available_models():
+    url = os.getenv("API_URL")
+    key = os.getenv("API_KEY")
+    if not url or not key:
+        return {"models": []}
+    
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    models_url = url.replace("/chat/completions", "/models")
+    try:
+        res = sync_requests.get(models_url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            return {"models": [m["id"] for m in res.json().get("data", [])]}
+    except:
+        pass
+    return {"models": []}
 
 @app.post("/config")
 async def update_api_config(new_config: Dict[str, Any]):
-    if "global_prompt_prefix" in new_config:
-        os.environ["GLOBAL_PROMPT_PREFIX"] = new_config["global_prompt_prefix"]
+    env_path = ".env"
+    env_lines = []
+    if os.path.exists(env_path):
+        with open(env_path, "r") as f:
+            env_lines = f.readlines()
+    
+    def update_env_line(key, value):
+        found = False
+        for i, line in enumerate(env_lines):
+            if line.startswith(f"{key}="):
+                env_lines[i] = f"{key}={value}\n"
+                found = True
+                break
+        if not found:
+            env_lines.append(f"{key}={value}\n")
+        os.environ[key] = str(value)
+
+    mappable = {
+        "global_prompt_prefix": "GLOBAL_PROMPT_PREFIX",
+        "editor": "EDITOR",
+        "api_url": "API_URL",
+        "api_key": "API_KEY",
+        "model": "API_MODEL",
+        "narrat_mode": "NARRAT_MODE"
+    }
+    
+    for k, env_k in mappable.items():
+        if k in new_config:
+            update_env_line(env_k, new_config[k])
+        
+    with open(env_path, "w") as f:
+        f.writelines(env_lines)
+        
     return {"status": "success", "config": await get_api_config()}
 
 @app.get("/games")
@@ -426,6 +498,20 @@ async def list_assets(game_id: str, category: str):
     p = get_game_path(game_id, "reference", category)
     assets = [f.replace(".txt", "") for f in os.listdir(p) if f.endswith(".txt")] if os.path.exists(p) else []
     return {"assets": assets}
+
+@app.get("/games/{game_id}/assets/{category}/{asset_id}")
+async def get_asset(game_id: str, category: str, asset_id: str, type: str = "description"):
+    if category == "backgrounds":
+        p = get_game_path(game_id, "reference", "backgrounds", f"{asset_id}.txt")
+    elif category == "characters":
+        p = get_game_path(game_id, "reference", "characters", asset_id, f"{asset_id}_{type}.txt")
+    else:
+        p = get_game_path(game_id, "reference", category, f"{asset_id}.txt")
+    
+    if not os.path.exists(p):
+        return {"content": ""}
+    with open(p, "r") as f:
+        return {"content": f.read()}
 
 @app.post("/games/{game_id}/assets/generate")
 async def generate_asset_description(game_id: str, req: Dict[str, str]):

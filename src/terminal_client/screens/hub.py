@@ -6,7 +6,7 @@ from rich.panel import Panel
 from rich.align import Align
 from rich.table import Table
 from rich.layout import Layout
-from src.terminal_client.utils import make_intro_layout, get_menu_choice, console, BASE_URL
+from src.terminal_client.utils import make_intro_layout, get_menu_choice, console, BASE_URL, edit_text_in_external_editor
 
 class GameHub:
     def __init__(self, custom_console, base_url):
@@ -123,7 +123,17 @@ class GameHub:
                 continue
             field_map = {"Title": "title", "Summary": "summary", "Genre": "genre", "Plot Outline": "plot_outline", "Prompt Prefix": "prompt_prefix", "Starting Point": "starting_point"}
             field = field_map[choice]
-            nv = questionary.text(f"New {field}", default=str(meta.get(field, ""))).ask()
+            initial_val = str(meta.get(field, ""))
+            nv = None
+            if len(initial_val) > 50 or choice in ["Summary", "Plot Outline", "Prompt Prefix"]:
+                action = questionary.select("How to edit?", choices=["Inline", "External Editor", "Back"]).ask()
+                if action == "Inline":
+                    nv = questionary.text(f"New {field}", default=initial_val).ask()
+                elif action == "External Editor":
+                    nv = edit_text_in_external_editor(initial_val)
+            else:
+                nv = questionary.text(f"New {field}", default=initial_val).ask()
+            
             if nv is not None:
                 requests.post(f"{self.base_url}/games/{game_id}/sessions/any/edit", json={"category": "metadata", "action": "update", "target": field, "content": nv})
                 meta[field] = nv
@@ -151,8 +161,17 @@ class GameHub:
                             res = requests.post(f"{self.base_url}/games/{game_id}/assets/rename", json={"category": category, "old_id": asset_id, "new_id": ni})
                             if res.status_code == 200: asset_id = ni; break
                     elif action == "Edit Description":
-                        nd = questionary.text("Description?").ask()
-                        requests.post(f"{self.base_url}/games/{game_id}/sessions/any/edit", json={"category": "reference", "action": "update", "sub_category": category[:-1], "target": asset_id, "content": nd})
+                        res = requests.get(f"{self.base_url}/games/{game_id}/assets/{category}/{asset_id}")
+                        initial_val = res.json().get("content", "")
+                        method = questionary.select("How to edit?", choices=["Inline", "External Editor", "Back"]).ask()
+                        if method == "Inline":
+                            nd = questionary.text("Description?", default=initial_val).ask()
+                        elif method == "External Editor":
+                            nd = edit_text_in_external_editor(initial_val)
+                        else: nd = None
+                        
+                        if nd is not None:
+                            requests.post(f"{self.base_url}/games/{game_id}/sessions/any/edit", json={"category": "reference", "action": "update", "sub_category": category[:-1], "target": asset_id, "content": nd})
                     elif action == "AI Generate Description":
                         with console.status("Generating..."):
                             requests.post(f"{self.base_url}/games/{game_id}/assets/generate", json={"category": category, "target": asset_id})

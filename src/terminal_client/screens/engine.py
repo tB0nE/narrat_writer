@@ -209,9 +209,14 @@ class GameEngine:
             return
 
         if et == "Dialogue":
-            action = questionary.select("Action", choices=["Edit Manually", "Rewrite with AI", "Back"]).ask()
+            action = questionary.select("Action", choices=["Edit Manually", "Edit in External Editor", "Rewrite with AI", "Back"]).ask()
             if action == "Edit Manually":
                 nt = questionary.text("New Text").ask()
+                if nt: requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "script", "action": "update", "target": str(idx), "content": f"talk {self.data.get('character', 'narrator')} \"{nt}\""})
+            elif action == "Edit in External Editor":
+                from src.terminal_client.utils import edit_text_in_external_editor
+                initial_text = self.data.get('text', '')
+                nt = edit_text_in_external_editor(initial_text)
                 if nt: requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "script", "action": "update", "target": str(idx), "content": f"talk {self.data.get('character', 'narrator')} \"{nt}\""})
             elif action == "Rewrite with AI":
                 instr = questionary.text("Instruction?").ask()
