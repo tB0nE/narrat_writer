@@ -234,14 +234,22 @@ async def update_api_config(new_config: Dict[str, Any]):
 
 @app.get("/games")
 async def list_games():
-    """Lists all games currently available in the games directory."""
+    """Lists all games currently available with detailed metadata."""
     games_dir = os.getenv("GARRAT_GAMES_DIR", "games")
     if not os.path.exists(games_dir): return {"games": []}
     games = []
     for d in os.listdir(games_dir):
         if os.path.isdir(os.path.join(games_dir, d)):
             meta = load_metadata(d)
-            if meta: games.append({"id": d, "title": meta.title, "summary": meta.summary})
+            if meta: 
+                games.append({
+                    "id": d, 
+                    "title": meta.title, 
+                    "summary": meta.summary,
+                    "genre": meta.genre,
+                    "characters": meta.characters,
+                    "plot_outline": meta.plot_outline
+                })
     return {"games": games}
 
 @app.get("/games/{game_id}/metadata")
@@ -281,13 +289,17 @@ async def create_game(req: CreateGameRequest):
 
     save_metadata(req.name, meta)
     
-    script_prompt = prompts.INITIAL_SCRIPT_PROMPT.format(metadata=meta.model_dump_json(indent=2), starting_point=meta.starting_point)
-    try:
-        initial_script = call_llm(script_prompt, game_id=req.name)
-        initial_script = re.sub(r'^```[\w]*\s*\n?', '', initial_script, flags=re.MULTILINE)
-        initial_script = re.sub(r'\n?```$', '', initial_script, flags=re.MULTILINE)
-    except:
-        initial_script = f"{meta.starting_point}:\n    talk narrator \"Welcome to {meta.title}.\"\n    choice:\n        \"Explore\":\n            jump explore_start\n\nexplore_start:\n    talk narrator \"Exploration.\"\n    jump {meta.starting_point}\n"
+    if req.prompt:
+        script_prompt = prompts.INITIAL_SCRIPT_PROMPT.format(metadata=meta.model_dump_json(indent=2), starting_point=meta.starting_point)
+        try:
+            initial_script = call_llm(script_prompt, game_id=req.name)
+            initial_script = re.sub(r'^```[\w]*\s*\n?', '', initial_script, flags=re.MULTILINE)
+            initial_script = re.sub(r'\n?```$', '', initial_script, flags=re.MULTILINE)
+        except:
+            initial_script = f"{meta.starting_point}:\n    talk narrator \"Welcome to {meta.title}.\"\n    choice:\n        \"Explore\":\n            jump explore_start\n\nexplore_start:\n    talk narrator \"Exploration.\"\n    jump {meta.starting_point}\n"
+    else:
+        # Default template for manual creation
+        initial_script = f"{meta.starting_point}:\n    talk narrator \"Welcome to your new game, {meta.title}!\"\n    talk narrator \"This is a default script. You can edit it to start your story.\"\n"
 
     with open(os.path.join(game_dir, "phase1.narrat"), "w") as f: f.write(initial_script)
     return {"status": "success", "game_id": req.name}
