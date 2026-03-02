@@ -1,4 +1,5 @@
 import pytest
+import os
 
 @pytest.fixture
 def test_game(client):
@@ -28,12 +29,17 @@ def test_get_metadata(client, test_game):
     assert data["title"] == "Test Fixture Title"
 
 def test_step_game_start(client, test_game):
+    # Explicitly write a test script to avoid AI fallback issues
+    script_path = os.path.join("test_games_tmp", test_game, "phase1.narrat")
+    with open(script_path, "w") as f:
+        f.write('main:\n    talk narrator "Hello from Test"\n')
+        
     payload = {"command": "R"} 
     response = client.post(f"/games/{test_game}/sessions/test_session/step", json=payload)
     assert response.status_code == 200
     data = response.json()
     assert data["type"] == "talk"
-    assert "Welcome" in data["text"]
+    assert "Hello from Test" in data["text"]
     assert data["current_label"] == "main"
 
 def test_edit_metadata(client, test_game):
@@ -52,5 +58,5 @@ def test_edit_metadata(client, test_game):
 
 def test_invalid_game_step(client):
     response = client.post("/games/non_existent/sessions/s/step", json={"command": " "})
-    # Parser returns end type for missing files
-    assert response.json()["type"] == "end"
+    # New behavior: returns missing_label for labels that don't exist
+    assert response.json()["type"] == "missing_label"

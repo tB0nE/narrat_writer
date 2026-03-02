@@ -8,12 +8,12 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(script_dir)
 
 try:
-    from client import main
+    from terminal_client import main
 except ImportError:
     # Fallback: try to re-run using the 'python' command in the shell
     # which is most likely to be the correct pyenv version
     print("[dim]Environment mismatch detected. Retrying with shell python...[/dim]")
-    os.execvp("python", ["python", os.path.join(script_dir, "client.py")] + sys.argv[1:])
+    os.execvp("python", ["python", os.path.join(script_dir, "terminal_client.py")] + sys.argv[1:])
 
 if __name__ == "__main__":
     main()

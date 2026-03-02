@@ -1,0 +1,58 @@
+import os
+import json
+import logging
+from typing import Optional
+from src.server.models import GameMetadata, SessionState
+
+logger = logging.getLogger("narrat_api")
+
+def get_game_path(game_id: str, *subpaths):
+    """Utility to get full path for game files."""
+    games_dir = os.getenv("GARRAT_GAMES_DIR", "games")
+    return os.path.join(games_dir, game_id, *subpaths)
+
+def load_metadata(game_id: str) -> Optional[GameMetadata]:
+    """Loads metadata for a specific game."""
+    path = get_game_path(game_id, "metadata.json")
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return GameMetadata(**json.load(f))
+    return None
+
+def save_metadata(game_id: str, meta: GameMetadata):
+    """Saves metadata for a specific game."""
+    path = get_game_path(game_id, "metadata.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(meta.model_dump(), f, indent=4)
+
+def load_session(game_id: str, session_id: str) -> SessionState:
+    """Loads a specific save session or creates a new one."""
+    path = get_game_path(game_id, "saves", f"{session_id}.json")
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            data = json.load(f)
+            return SessionState(**data)
+    meta = load_metadata(game_id)
+    return SessionState(session_id=session_id, current_label=meta.starting_point if meta else "main")
+
+def save_session(game_id: str, state: SessionState):
+    """Saves the current session state to disk."""
+    path = get_game_path(game_id, "saves", f"{state.session_id}.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(state.model_dump_json(indent=2))
+
+def get_reference(game_id: str, category: str, name: str, sub_type: str = None):
+    """Fetches a reference text file (character desc, background info, etc.)."""
+    if category == "backgrounds":
+        path = get_game_path(game_id, "reference", "backgrounds", f"{name}.txt")
+    elif category == "characters":
+        suffix = sub_type or "description"
+        path = get_game_path(game_id, "reference", "characters", name, f"{name}_{suffix}.txt")
+    else:
+        return f"[{name} {sub_type or ''} placeholder]"
+    
+    if os.path.exists(path):
+        with open(path, "r") as f: return f.read().strip()
+    return f"[{name} {category} missing]"
