@@ -65,3 +65,24 @@ def get_menu_choice(options, make_layout_func):
                     elif key.key == Keys.Down: idx = (idx + 1) % len(options)
                     elif key.key == Keys.Enter or key.key == Keys.ControlM: return options[idx]
                     elif key.key == Keys.ControlC: sys.exit()
+
+def open_in_external_editor(filepath: str, line_number: int = 1):
+    """Opens the specified file in the system's default editor at the given line."""
+    editor = os.getenv("EDITOR", "vim")
+    
+    # Standard 'jump to line' flags for common editors
+    cmd = [editor]
+    if "vim" in editor or "vi" in editor or "nano" in editor:
+        cmd.append(f"+{line_number}")
+    elif "code" in editor: # VS Code
+        cmd.extend(["--goto", f"{filepath}:{line_number}"])
+        # VS Code is a bit different, but for terminal editors the above works best
+    
+    if "code" not in editor:
+        cmd.append(filepath)
+        
+    try:
+        subprocess.call(cmd)
+    except Exception as e:
+        console.print(f"[red]Failed to open editor: {e}[/red]")
+        time.sleep(2)
