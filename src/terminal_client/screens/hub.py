@@ -33,9 +33,17 @@ class GameHub:
     def render_game_hub(self, options, selected_idx, meta):
         """Renders the game-specific hub screen with metadata summary and interactive menu."""
         layout = make_intro_layout()
-        info = f"[bold cyan]{meta['title']}[/bold cyan]\n\n{meta['summary']}\n\n[dim]Genre: {meta['genre']}[/dim]\n[dim]Characters: {', '.join(meta['characters'])}[/dim]"
-        if meta.get("plot_outline"): info += f"\n\n[bold white]Plot Outline:[/bold white]\n{meta['plot_outline'][:200]}..."
-        layout["left"].update(Panel(Align.center(info, vertical="middle"), border_style="cyan"))
+        info = f"[bold cyan]{meta['title']}[/bold cyan]\n\n"
+        info += f"{meta['summary']}\n\n"
+        info += f"[bold white]Genre:[/bold white] {meta.get('genre', 'Unknown')}\n"
+        chars = meta.get('characters', [])
+        info += f"[bold white]Characters:[/bold white] {', '.join(chars) if chars else 'None'}\n\n"
+        plot = meta.get('plot_outline', '')
+        if plot:
+            info += f"[bold white]Plot Outline:[/bold white]\n{plot[:500]}{'...' if len(plot) > 500 else ''}"
+            
+        layout["left"].update(Panel(Align.left(info, vertical="middle"), border_style="cyan", padding=(1, 3)))
+        
         menu_text = ""
         for i, opt in enumerate(options):
             if i == selected_idx: menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
@@ -74,9 +82,13 @@ class GameHub:
                 if idx < len(saves):
                     s = saves[idx]
                     dt = datetime.fromtimestamp(s['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
-                    info = f"[bold cyan]Save: {s['id']}[/bold cyan]\n[dim]{dt}[/dim]\n\n[bold white]Location:[/bold white] {s['label']}\n\n[bold white]Last Dialogue:[/bold white]\n[italic]\"{s['last_text']}\"[/italic]"
-                else: info = "[dim]Back to game hub.[/dim]"
-                layout["left"].update(Panel(Align.center(info, vertical="middle"), title="Save Preview", border_style="cyan"))
+                    info = f"[bold cyan]Save: {s['id']}[/bold cyan]\n[dim]{dt}[/dim]\n\n"
+                    info += f"[bold white]Location:[/bold white] {s['label']}\n\n"
+                    info += f"[bold white]Last Dialogue:[/bold white]\n[italic]\"{s['last_text']}\"[/italic]"
+                else: 
+                    info = "[dim italic]Back to game hub.[/dim italic]"
+                
+                layout["left"].update(Panel(Align.left(info, vertical="middle"), title="Save Preview", border_style="cyan", padding=(1, 3)))
                 menu_text = ""
                 for i, opt in enumerate(opts):
                     if i == idx: menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"

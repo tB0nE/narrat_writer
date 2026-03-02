@@ -1,6 +1,8 @@
 import requests
 import sys
 import time
+import shutil
+import re
 import questionary
 from rich.panel import Panel
 from rich.align import Align
@@ -95,35 +97,48 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
         
         method = questionary.select(
             "Choose Creation Method",
-            choices=[
-                "AI Assisted",
-                "Manual",
-                "Back"
-            ]
+            choices=["AI Assisted", "Manual", "Back"]
         ).ask()
         
         if method == "Back" or method is None: return
 
-        game_id = questionary.text("Enter unique Game ID (no spaces)").ask()
-        if not game_id: return
+        title = questionary.text("Game Title").ask()
+        if not title: return
+
+        # Auto-generate Game ID
+        words = re.findall(r'\w+', title.lower())
+        base_id = "_".join(words[:2]) if words else "new_game"
         
+        # Check for existence and unique ID
+        res = requests.get(f"{self.base_url}/games")
+        existing_ids = [g["id"] for g in res.json().get("games", [])]
+        
+        game_id = base_id
+        counter = 2
+        while game_id in existing_ids:
+            game_id = f"{base_id}_{counter}"
+            counter += 1
+
+        res_config = requests.get(f"{self.base_url}/config")
+        editor = res_config.json().get("editor")
+        use_external = editor and editor != "None"
+
         if method == "AI Assisted":
             console.print("\n[bold cyan]AI Guidance:[/bold cyan]")
             console.print("Describe your game idea. Include [italic]Genre, Setting, Characters, and Plot hooks.[/italic]")
-
-            prompt_method = questionary.select("How to enter prompt?", choices=["Inline", "External Editor", "Back"]).ask()
-            if prompt_method == "Back" or prompt_method is None: return
-
-            if prompt_method == "Inline":
-                prompt = questionary.text("Enter your prompt").ask()
-            else:
+            
+            if use_external:
+                console.print("\n[yellow]Opening external editor for your prompt...[/yellow]")
+                time.sleep(0.3)
                 from src.terminal_client.utils import edit_text_in_external_editor
                 prompt = edit_text_in_external_editor("")
+            else:
+                prompt = questionary.text("Enter your prompt").ask()
 
             if not prompt: return
             
             while True:
-                with console.status("[bold green]AI is scaffolding your game...[/bold green]"):
+                with console.status(f"[bold green]AI is scaffolding '{game_id}'...[/bold green]"):
                     res = requests.post(f"{self.base_url}/games/create", json={"name": game_id, "prompt": prompt})
                 
                 if res.status_code == 200:
@@ -135,19 +150,29 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                 else:
                     error_detail = res.json().get('detail', 'Unknown error')
                     console.print(Panel(f"[red]Error:[/red] {error_detail}", title="Generation Failed", border_style="red"))
-                    
-                    action = questionary.select(
-                        "What would you like to do?",
-                        choices=["Retry same prompt", "Edit prompt", "Back to menu"]
-                    ).ask()
-                    
-                    if action == "Back to menu" or action is None: return
+                    action = questionary.select("Action", choices=["Retry", "Edit prompt", "Back"]).ask()
+                    if action == "Back" or action is None: return
                     if action == "Edit prompt":
-                        prompt = questionary.text("Enter new prompt").ask()
+                        if use_external:
+                            console.print("\n[yellow]Opening external editor...[/yellow]")
+                            time.sleep(0.3)
+                            prompt = edit_text_in_external_editor(prompt)
+                        else:
+                            prompt = questionary.text("Prompt", default=prompt).ask()
         else:
-            title = questionary.text("Game Title").ask()
-            summary = questionary.text("Game Summary").ask()
-            res = requests.post(f"{self.base_url}/games/create", json={"name": game_id, "manual_data": {"title": title, "summary": summary, "genre": "Custom"}})
+            if use_external:
+                console.print("\n[yellow]Opening external editor for game summary...[/yellow]")
+                time.sleep(0.3)
+                from src.terminal_client.utils import edit_text_in_external_editor
+                summary = edit_text_in_external_editor("")
+            else:
+                summary = questionary.text("Game Summary").ask()
+            
+            if summary is None: return
+            
+            with console.status(f"[bold green]Creating '{game_id}'...[/bold green]"):
+                res = requests.post(f"{self.base_url}/games/create", json={"name": game_id, "manual_data": {"title": title, "summary": summary, "genre": "Custom"}})
+            
             if res.status_code == 200:
                 console.print(f"[green]Game '{game_id}' created successfully![/green]")
                 from src.terminal_client.screens.hub import GameHub
@@ -170,9 +195,20 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
             layout = make_intro_layout()
             if idx < len(games):
                 g = games[idx]
-                info = f"[bold cyan]{g['title']}[/bold cyan]\n\n{g['summary']}"
-            else: info = "[dim]Back to main menu.[/dim]"
-            layout["left"].update(Panel(Align.center(info, vertical="middle"), title="Game Preview", border_style="cyan"))
+                info = f"[bold cyan]{g['title']}[/bold cyan]\n\n"
+                info += f"{g['summary']}\n\n"
+                info += f"[bold white]Genre:[/bold white] {g.get('genre', 'Unknown')}\n"
+                chars = g.get('characters', [])
+                info += f"[bold white]Characters:[/bold white] {', '.join(chars) if chars else 'None'}\n\n"
+                plot = g.get('plot_outline', '')
+                if plot:
+                    info += f"[bold white]Plot Outline:[/bold white]\n{plot[:300]}{'...' if len(plot) > 300 else ''}"
+            else: 
+                info = "[dim italic]Back to main menu.[/dim italic]"
+            
+            # Left aligned with padding, vertically middle
+            layout["left"].update(Panel(Align.left(info, vertical="middle"), border_style="cyan", padding=(1, 3)))
+            
             menu_text = ""
             for i, opt in enumerate(options):
                 if i == idx: menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
@@ -180,12 +216,16 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
             layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Select Game", border_style="yellow"))
             return layout
 
-        options = [g["id"] for g in games] + ["Back"]
-        choice = get_menu_choice(options, render_select)
-        if choice and choice != "Back":
+        # Display Titles in menu, but map back to IDs for selection
+        menu_options = [g["title"] for g in games] + ["Back"]
+        title_to_id = {g["title"]: g["id"] for g in games}
+        
+        choice_title = get_menu_choice(menu_options, render_select)
+        if choice_title and choice_title != "Back":
+            game_id = title_to_id[choice_title]
             from src.terminal_client.screens.hub import GameHub
             hub = GameHub(self.console, self.base_url)
-            hub.run(choice)
+            hub.run(game_id)
 
     def global_options_flow(self):
         """Settings menu for application-wide configuration using a single-loop interaction."""
@@ -196,7 +236,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
         res = requests.get(f"{self.base_url}/config")
         config = res.json()
 
-        def render_options(config=config, state=state):
+        def render_options(config, state):
             layout = make_intro_layout()
             
             # Left Panel Content
@@ -205,7 +245,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                 info += f"[bold white]API URL:[/bold white] {config.get('api_url')}\n"
                 info += f"[bold white]Model:[/bold white] {config.get('model')}\n"
                 info += f"[bold white]Mode:[/bold white] {config.get('narrat_mode')}\n"
-                info += f"[bold white]Editor:[/bold white] {config.get('editor', 'vim')}\n"
+                info += f"[bold white]Editor:[/bold white] {config.get('editor') or 'None'}\n"
                 info += f"[bold white]Prompt Prefix:[/bold white] {config.get('global_prompt_prefix', 'None')}\n"
                 layout["left"].update(Panel(Align.center(info, vertical="middle"), title="Settings Preview", border_style="cyan"))
             
@@ -239,10 +279,10 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
             layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Global Options", border_style="yellow"))
             return layout
 
-        with Live(render_options(), screen=True, auto_refresh=False) as live:
+        with Live(render_options(config, state), screen=True, auto_refresh=False) as live:
             with input_obj.raw_mode():
                 while True:
-                    live.update(render_options()); live.refresh()
+                    live.update(render_options(config, state)); live.refresh()
                     keys = input_obj.read_keys()
                     if not keys:
                         time.sleep(0.05); continue
@@ -262,7 +302,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                                     res = requests.get(f"{self.base_url}/config"); config = res.json()
                                 elif choice == "Select Model":
                                     state["mode"], state["field"] = "loading", "Models"
-                                    live.update(render_options()); live.refresh()
+                                    live.update(render_options(config, state)); live.refresh()
                                     m_res = requests.get(f"{self.base_url}/config/models")
                                     models = m_res.json().get("models", [])
                                     if not models:
@@ -280,7 +320,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                                 elif choice == "Select Editor":
                                     state["mode"], state["field"], state["sub_options"], state["sub_idx"] = "select", "Editor", ["vim", "nano", "code", "subl", "None", "Back"], 0
                                 elif choice == "Edit Prompt Prefix":
-                                    editor = config.get("editor", "None")
+                                    editor = config.get("editor", "")
                                     current_prefix = config.get("global_prompt_prefix", "")
                                     live.stop()
                                     if editor and editor != "None":
@@ -296,12 +336,23 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                             elif state["mode"] == "select":
                                 selection = state["sub_options"][state["sub_idx"]]
                                 field = state["field"]
-                                state["mode"] = "view"
-                                if selection != "Back":
+                                
+                                if selection == "Back":
+                                    state["mode"] = "view"
+                                else:
+                                    if field == "Editor" and selection != "None":
+                                        if not shutil.which(selection):
+                                            live.stop()
+                                            console.print(f"[red]Error: Editor '{selection}' not found on system path.[/red]")
+                                            time.sleep(2)
+                                            live.start()
+                                            continue # Keep state in select mode
+                                            
+                                    state["mode"] = "view"
                                     payload = {}
                                     if field == "Model": payload["model"] = selection
                                     elif field == "Mode": payload["narrat_mode"] = selection
-                                    elif field == "Editor": payload["editor"] = selection
+                                    elif field == "Editor": payload["editor"] = "" if selection == "None" else selection
                                     requests.post(f"{self.base_url}/config", json=payload)
                                     res = requests.get(f"{self.base_url}/config"); config = res.json()
 
