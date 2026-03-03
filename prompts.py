@@ -99,6 +99,18 @@ REGENERATE_METADATA_PROMPT = """Update the following visual novel metadata based
 Current Metadata: {current_metadata}
 Return ONLY JSON in the same format."""
 
+METADATA_REFINE_PROMPT = """You are a creative consultant for a visual novel.
+The user wants to refine the '{field}' of their game.
+
+Current Metadata:
+{metadata}
+
+User Instruction: {instruction}
+
+Generate 3 distinct, high-quality options for the '{field}' field.
+Return ONLY a JSON object with a key 'options' containing a list of 3 strings.
+Example: {{"options": ["Option 1", "Option 2", "Option 3"]}}"""
+
 ASSET_DESCRIPTION_PROMPT = """You are a creative writer for a visual novel.
 Based on the game concept below, write a detailed description for the following asset: {asset_id} ({asset_type}).
 

@@ -252,6 +252,15 @@ async def list_games():
                 })
     return {"games": games}
 
+@app.get("/games/{game_id}/labels")
+async def get_game_labels(game_id: str):
+    from src.server.parser import NarratParser
+    try:
+        parser = NarratParser(game_id)
+        return {"labels": list(parser.labels.keys())}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/games/{game_id}/metadata")
 async def get_game_metadata(game_id: str):
     meta = load_metadata(game_id)
@@ -460,6 +469,30 @@ async def ai_edit_script(game_id: str, session_id: str, req: Dict[str, str]):
         with open(p, "w") as f: f.writelines(lines)
         return {"status": "success", "new_content": new_content}
     except Exception as e: raise HTTPException(status_code=502, detail=str(e))
+
+@app.post("/games/{game_id}/refine/options")
+async def refine_metadata_options(game_id: str, req: Dict[str, str]):
+    field = req.get("field")
+    instruction = req.get("instruction", "Make it better")
+    current_meta = load_metadata(game_id)
+    if not current_meta: raise HTTPException(status_code=404, detail="Not found")
+    
+    from src.server.ai import call_llm
+    prompt = prompts.METADATA_REFINE_PROMPT.format(
+        field=field,
+        instruction=instruction,
+        metadata=current_meta.model_dump_json(indent=2)
+    )
+    
+    try:
+        raw = call_llm(prompt, game_id=game_id)
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if match:
+            data = json.loads(match.group(0))
+            return {"options": data.get("options", [])[:3]}
+        raise HTTPException(status_code=500, detail="AI returned invalid format")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 @app.post("/games/{game_id}/regenerate")
 async def regenerate_metadata(game_id: str, req: CreateGameRequest):

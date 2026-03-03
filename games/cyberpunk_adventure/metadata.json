@@ -1,7 +1,11 @@
 {
-    "title": "Cyberpunk Adventure",
+    "title": "Neon Rain",
     "summary": "A neon-drenched journey through the streets of Neo-Tokyo as Anya, a skilled hacker caught in a web of corporate intrigue.",
     "genre": "Cyberpunk",
-    "characters": ["Anya"],
-    "starting_point": "main"
+    "characters": [
+        "Anya"
+    ],
+    "starting_point": "main",
+    "plot_outline": "",
+    "prompt_prefix": ""
 }

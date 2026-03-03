@@ -1,34 +1,43 @@
 import requests
 import questionary
 import time
+import os
+import re
 from datetime import datetime
 from rich.panel import Panel
 from rich.align import Align
 from rich.table import Table
 from rich.layout import Layout
-from src.terminal_client.utils import make_intro_layout, get_menu_choice, console, BASE_URL, edit_text_in_external_editor
+from rich.live import Live
+from prompt_toolkit.input import create_input
+from prompt_toolkit.keys import Keys
+from src.terminal_client.utils import (
+    make_intro_layout, get_menu_choice, console, BASE_URL, 
+    edit_text_in_external_editor
+)
 
 class GameHub:
     def __init__(self, custom_console, base_url):
         self.console = custom_console
         self.base_url = base_url
 
-    def render_save_manager(self, options, selected_idx, saves) -> Layout:
-        """Renders the save browser with a preview of the highlighted save."""
-        layout = make_intro_layout()
-        if selected_idx < len(saves):
-            s = saves[selected_idx]
-            dt = datetime.fromtimestamp(s['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
-            info = f"[bold cyan]Save: {s['id']}[/bold cyan]\n[dim]{dt}[/dim]\n\n[bold white]Location:[/bold white] {s['label']}\n\n[bold white]Last Dialogue:[/bold white]\n[italic]\"{s['last_text']}\"[/italic]"
-        else:
-            info = "[dim]Go back to the game hub.[/dim]"
-        layout["left"].update(Panel(Align.center(info, vertical="middle"), title="Save Preview", border_style="cyan"))
-        menu_text = ""
-        for i, opt in enumerate(options):
-            if i == selected_idx: menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
-            else: menu_text += f"  {opt}\n"
-        layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Saves", border_style="yellow"))
-        return layout
+    def run(self, game_id):
+        """Management hub for a specific game ID."""
+        while True:
+            res = requests.get(f"{self.base_url}/games/{game_id}/metadata")
+            meta = res.json()
+            options = ["Start New Game", "Load Game", "Manage Assets", "Edit Game", "Back"]
+            choice = get_menu_choice(options, lambda opts, idx: self.render_game_hub(opts, idx, meta))
+            if choice == "Back" or choice is None: return
+            if choice == "Start New Game":
+                sid = questionary.text("Enter new session name", default="autosave").ask()
+                if sid:
+                    from src.terminal_client.screens.engine import GameEngine
+                    engine = GameEngine(game_id, sid, self.console, self.base_url)
+                    engine.run()
+            elif choice == "Load Game": self.save_manager_flow(game_id)
+            elif choice == "Manage Assets": self.asset_manager_flow(game_id, meta)
+            elif choice == "Edit Game": self.edit_metadata_flow(game_id, meta)
 
     def render_game_hub(self, options, selected_idx, meta):
         """Renders the game-specific hub screen with metadata summary and interactive menu."""
@@ -50,24 +59,6 @@ class GameHub:
             else: menu_text += f"  {opt}\n"
         layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Game Hub", border_style="yellow"))
         return layout
-
-    def run(self, game_id):
-        """Management hub for a specific game ID."""
-        while True:
-            res = requests.get(f"{self.base_url}/games/{game_id}/metadata")
-            meta = res.json()
-            options = ["Start New Game", "Load Game", "Manage Assets", "Edit Options", "Back"]
-            choice = get_menu_choice(options, lambda opts, idx: self.render_game_hub(opts, idx, meta))
-            if choice == "Back" or choice is None: return
-            if choice == "Start New Game":
-                sid = questionary.text("Enter new session name", default="autosave").ask()
-                if sid:
-                    from src.terminal_client.screens.engine import GameEngine
-                    engine = GameEngine(game_id, sid, self.console, self.base_url)
-                    engine.run()
-            elif choice == "Load Game": self.save_manager_flow(game_id)
-            elif choice == "Manage Assets": self.asset_manager_flow(game_id, meta)
-            elif choice == "Edit Options": self.edit_metadata_flow(game_id, meta)
 
     def save_manager_flow(self, game_id):
         """Interactive flow to list, load, and delete saves."""
@@ -109,46 +100,159 @@ class GameHub:
                     requests.delete(f"{self.base_url}/games/{game_id}/saves/{choice}")
 
     def edit_metadata_flow(self, game_id, meta):
-        """Dedicated UI for browsing and editing game metadata with live feedback."""
-        while True:
-            options = ["Title", "Summary", "Genre", "Plot Outline", "Prompt Prefix", "Starting Point", "Regenerate with AI", "Back"]
-            def render_meta(opts, idx, meta=meta):
-                layout = make_intro_layout()
-                info = f"[bold cyan]Title:[/bold cyan] {meta['title']}\n[bold cyan]Genre:[/bold cyan] {meta['genre']}\n\n[bold white]Summary:[/bold white]\n{meta['summary']}\n\n"
-                if meta.get("plot_outline"): info += f"[bold white]Plot Outline:[/bold white]\n{meta['plot_outline']}\n\n"
-                info += f"[bold white]Starting Point:[/bold white] {meta.get('starting_point', 'main')}"
-                layout["left"].update(Panel(info, title="Metadata Preview", border_style="cyan", padding=(1, 2)))
-                menu_text = ""
-                for i, opt in enumerate(opts):
-                    if i == idx: menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
-                    else: menu_text += f"  {opt}\n"
-                layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Edit Metadata", border_style="yellow"))
-                return layout
-            choice = get_menu_choice(options, render_meta)
-            if choice == "Back" or choice is None: break
-            if choice == "Regenerate with AI":
-                p = questionary.text("Prompt?").ask()
-                if p is None: continue
-                with console.status("Regenerating..."):
-                    res = requests.post(f"{self.base_url}/games/{game_id}/regenerate", json={"name": game_id, "prompt": p or meta['summary']})
-                if res.status_code == 200: meta = res.json()["metadata"]
-                continue
-            field_map = {"Title": "title", "Summary": "summary", "Genre": "genre", "Plot Outline": "plot_outline", "Prompt Prefix": "prompt_prefix", "Starting Point": "starting_point"}
-            field = field_map[choice]
-            initial_val = str(meta.get(field, ""))
-            nv = None
-            if len(initial_val) > 50 or choice in ["Summary", "Plot Outline", "Prompt Prefix"]:
-                action = questionary.select("How to edit?", choices=["Inline", "External Editor", "Back"]).ask()
-                if action == "Inline":
-                    nv = questionary.text(f"New {field}", default=initial_val).ask()
-                elif action == "External Editor":
-                    nv = edit_text_in_external_editor(initial_val)
-            else:
-                nv = questionary.text(f"New {field}", default=initial_val).ask()
-            
-            if nv is not None:
-                requests.post(f"{self.base_url}/games/{game_id}/sessions/any/edit", json={"category": "metadata", "action": "update", "target": field, "content": nv})
-                meta[field] = nv
+        """Dedicated UI for browsing and editing game metadata with live feedback and inline inputs."""
+        state = {"mode": "view", "field": None, "sub_options": [], "sub_idx": 0, "input_val": "", "main_idx": 0}
+        main_options = ["Title", "Summary", "Genre", "Plot Outline", "Prompt Prefix", "Starting Point", "Refine with AI", "Back"]
+        input_obj = create_input()
+        genres = ["Cyberpunk", "Fantasy", "Mystery", "Sci-Fi", "Horror", "Romance", "Slice of Life", "Drama", "Comedy", "Thriller", "Custom", "Back"]
+
+        def render_meta(meta, state):
+            layout = make_intro_layout()
+            if state["mode"] == "view":
+                info = f"[bold cyan]Metadata Preview[/bold cyan]\n\n"
+                info += f"[bold white]Title:[/bold white] {meta.get('title')}\n"
+                info += f"[bold white]Genre:[/bold white] {meta.get('genre')}\n"
+                info += f"[bold white]Starting Point:[/bold white] {meta.get('starting_point', 'main')}\n\n"
+                info += f"[bold white]Summary:[/bold white]\n{meta.get('summary', '')[:300]}...\n\n"
+                if meta.get("plot_outline"):
+                    info += f"[bold white]Plot Outline:[/bold white]\n{meta.get('plot_outline', '')[:300]}...\n"
+                layout["left"].update(Panel(Align.left(info, vertical="middle"), title="Current Metadata", border_style="cyan", padding=(1, 3)))
+            elif state["mode"] == "select":
+                info = f"[bold yellow]Select {state['field']}[/bold yellow]\n\n"
+                for i, s_opt in enumerate(state["sub_options"]):
+                    if i == state["sub_idx"]: info += f"> [bold yellow]{s_opt}[/bold yellow]\n"
+                    else: info += f"  {s_opt}\n"
+                layout["left"].update(Panel(Align.center(info, vertical="middle"), title=f"Choose {state['field']}", border_style="yellow"))
+            elif state["mode"] == "input":
+                info = f"[bold green]Editing {state['field']}[/bold green]\n\n"
+                info += f"[dim italic]Please see the input prompt below...[/dim italic]\n"
+                info += f"\nCurrent Value: [bold]{state['input_val']}[/bold]"
+                layout["left"].update(Panel(Align.center(info, vertical="middle"), title=f"Enter {state['field']}", border_style="green"))
+            elif state["mode"] == "loading":
+                info = f"[bold yellow]Loading {state['field']}...[/bold yellow]\n\n"
+                layout["left"].update(Panel(Align.center(info, vertical="middle"), title="Please Wait", border_style="yellow"))
+
+            menu_text = ""
+            for i, opt in enumerate(main_options):
+                if i == state["main_idx"]: menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
+                else: menu_text += f"  {opt}\n"
+            layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Edit Game", border_style="yellow"))
+            return layout
+
+        with Live(render_meta(meta, state), screen=True, auto_refresh=False) as live:
+            with input_obj.raw_mode():
+                while True:
+                    try:
+                        live.update(render_meta(meta, state)); live.refresh()
+                        keys = input_obj.read_keys()
+                        if not keys:
+                            time.sleep(0.05); continue
+                        for key in keys:
+                            if key.key == Keys.Up:
+                                if state["mode"] == "view": state["main_idx"] = (state["main_idx"] - 1) % len(main_options)
+                                elif state["mode"] == "select": state["sub_idx"] = (state["sub_idx"] - 1) % len(state["sub_options"])
+                            elif key.key == Keys.Down:
+                                if state["mode"] == "view": state["main_idx"] = (state["main_idx"] + 1) % len(main_options)
+                                elif state["mode"] == "select": state["sub_idx"] = (state["sub_idx"] + 1) % len(state["sub_options"])
+                            elif key.key == Keys.Enter or key.key == Keys.ControlM:
+                                if state["mode"] == "view":
+                                    choice = main_options[state["main_idx"]]
+                                    if choice == "Back": return
+                                    field_map = {"Title": "title", "Summary": "summary", "Genre": "genre", "Plot Outline": "plot_outline", "Prompt Prefix": "prompt_prefix", "Starting Point": "starting_point"}
+                                    field_key = field_map.get(choice)
+                                    
+                                    if choice == "Title":
+                                        state["mode"], state["field"], state["input_val"] = "input", "Title", meta.get("title", "")
+                                        live.stop(); console.clear(); console.print(render_meta(meta, state))
+                                        nv = questionary.text("New Title", default=state["input_val"]).ask()
+                                        if nv: 
+                                            requests.post(f"{self.base_url}/games/{game_id}/sessions/any/edit", json={"category": "metadata", "action": "update", "target": "title", "content": nv})
+                                            meta["title"] = nv
+                                        state["mode"] = "view"; live.start()
+                                    elif choice in ["Summary", "Plot Outline", "Prompt Prefix"]:
+                                        res_config = requests.get(f"{self.base_url}/config")
+                                        editor = res_config.json().get("editor", "")
+                                        current_val = meta.get(field_key, "") or ""
+                                        live.stop(); console.clear(); console.print(render_meta(meta, state))
+                                        if editor and editor != "None":
+                                            console.print(f"\n[yellow]Opening {editor} for {choice}...[/yellow]")
+                                            time.sleep(0.3); console.clear()
+                                            nv = edit_text_in_external_editor(current_val)
+                                        else:
+                                            nv = questionary.text(f"New {choice}", default=current_val).ask()
+                                        if nv is not None:
+                                            requests.post(f"{self.base_url}/games/{game_id}/sessions/any/edit", json={"category": "metadata", "action": "update", "target": field_key, "content": nv})
+                                            meta[field_key] = nv
+                                        state["mode"] = "view"; live.start()
+                                    elif choice == "Genre":
+                                        state["mode"], state["field"], state["sub_options"], state["sub_idx"] = "select", "Genre", genres, 0
+                                    elif choice == "Starting Point":
+                                        state["mode"], state["field"] = "loading", "Labels"
+                                        live.update(render_meta(meta, state)); live.refresh()
+                                        res_l = requests.get(f"{self.base_url}/games/{game_id}/labels")
+                                        labels = res_l.json().get("labels", ["main"])
+                                        state["mode"], state["field"], state["sub_options"], state["sub_idx"] = "select", "Starting Point", labels + ["Back"], 0
+                                    elif choice == "Refine with AI":
+                                        state["mode"], state["field"], state["sub_options"], state["sub_idx"] = "select", "Field to Refine", ["Title", "Summary", "Plot Outline", "Back"], 0
+
+                                elif state["mode"] == "select":
+                                    selection = state["sub_options"][state["sub_idx"]]
+                                    field = state["field"]
+                                    if selection == "Back" or selection == "Keep Current":
+                                        state["mode"] = "view"
+                                    elif field == "Genre" and selection == "Custom":
+                                        state["mode"], state["field"], state["input_val"] = "input", "Custom Genre", meta.get("genre", "")
+                                        live.stop(); console.clear(); console.print(render_meta(meta, state))
+                                        nv = questionary.text("Enter Genre").ask()
+                                        if nv:
+                                            requests.post(f"{self.base_url}/games/{game_id}/sessions/any/edit", json={"category": "metadata", "action": "update", "target": "genre", "content": nv})
+                                            meta["genre"] = nv
+                                        state["mode"] = "view"; live.start()
+                                    elif field == "Genre":
+                                        requests.post(f"{self.base_url}/games/{game_id}/sessions/any/edit", json={"category": "metadata", "action": "update", "target": "genre", "content": selection})
+                                        meta["genre"] = selection; state["mode"] = "view"
+                                    elif field == "Starting Point":
+                                        requests.post(f"{self.base_url}/games/{game_id}/sessions/any/edit", json={"category": "metadata", "action": "update", "target": "starting_point", "content": selection})
+                                        meta["starting_point"] = selection; state["mode"] = "view"
+                                    elif field == "Field to Refine":
+                                        if selection == "Back":
+                                            state["mode"] = "view"; continue
+                                            
+                                        target_map = {"Title": "title", "Summary": "summary", "Plot Outline": "plot_outline"}
+                                        target_field = target_map[selection]
+                                        
+                                        # Immediate Query
+                                        state["mode"], state["field"] = "loading", f"Querying AI for {selection} ideas..."
+                                        live.update(render_meta(meta, state)); live.refresh()
+                                        
+                                        try:
+                                            # We send a default instruction since we want it immediate
+                                            r_res = requests.post(f"{self.base_url}/games/{game_id}/refine/options", json={"field": target_field, "instruction": "Generate 3 creative and varied improvements for this field."})
+                                            if r_res.status_code == 200:
+                                                ai_opts = r_res.json()["options"]
+                                                current_val = meta.get(target_field, "")
+                                                # Show original + 3 AI options
+                                                state["mode"], state["field"], state["sub_options"], state["sub_idx"] = "select", f"New {selection}", [current_val] + ai_opts + ["Back"], 0
+                                                state["target_field_key"] = target_field
+                                            else: raise Exception("API Error")
+                                        except Exception as e:
+                                            live.stop(); console.print(f"[red]Error: {e}[/red]"); time.sleep(2); live.start()
+                                            state["mode"] = "view"
+                                    elif field.startswith("New "):
+                                        tfk = state.get("target_field_key")
+                                        if selection != "Back" and tfk:
+                                            requests.post(f"{self.base_url}/games/{game_id}/sessions/any/edit", json={"category": "metadata", "action": "update", "target": tfk, "content": selection})
+                                            meta[tfk] = selection
+                                        state["mode"] = "view"
+
+                            elif key.key == Keys.Escape:
+                                if state["mode"] != "view": state["mode"] = "view"
+                                else: return
+                    except Exception as e:
+                        live.stop()
+                        console.print(f"[red]Error in Metadata Flow: {e}[/red]")
+                        time.sleep(2)
+                        live.start()
 
     def asset_manager_flow(self, game_id, meta):
         """Advanced management for game reference assets."""
