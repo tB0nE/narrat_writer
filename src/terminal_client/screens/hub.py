@@ -255,40 +255,177 @@ class GameHub:
                         live.start()
 
     def asset_manager_flow(self, game_id, meta):
-        """Advanced management for game reference assets."""
-        while True:
-            cat_choice = questionary.select("Category", choices=["Backgrounds", "Characters", "Scenes", "Back"]).ask()
-            if cat_choice == "Back" or cat_choice is None: break
-            category = cat_choice.lower()
-            while True:
-                res = requests.get(f"{self.base_url}/games/{game_id}/assets/{category}")
-                assets = res.json()["assets"]
-                asset_id = questionary.select(f"Select {category[:-1].capitalize()}", choices=assets + [questionary.Separator(), "Add New", "Back"]).ask()
-                if asset_id == "Back" or asset_id is None: break
-                if asset_id == "Add New":
-                    asset_id = questionary.text("Unique ID?").ask()
-                    if not asset_id: continue
+        """Advanced management for game reference assets using a single-loop interaction."""
+        state = {"mode": "view", "category": None, "asset_id": None, "field": None, "sub_options": [], "sub_idx": 0, "main_idx": 0, "asset_content": ""}
+        categories = ["Backgrounds", "Characters", "Scenes", "Back"]
+        input_obj = create_input()
+
+        def fetch_preview(cat, aid):
+            try:
+                res = requests.get(f"{self.base_url}/games/{game_id}/assets/{cat.lower()}/{aid}", timeout=0.5)
+                if res.status_code == 200: return res.json().get("content", "")
+            except: pass
+            return "[No description available]"
+
+        def render_assets(state):
+            layout = make_intro_layout()
+            
+            # Left Panel Content
+            if state["mode"] == "view":
+                info = "[bold cyan]Asset Manager[/bold cyan]\n\n"
+                info += "Select a category on the right to browse and edit game assets.\n\n"
+                info += "[dim]Current Selection:[/dim]\n"
+                info += f"Category: [white]{state['category'] or 'None'}[/white]\n"
+                info += f"Asset: [white]{state['asset_id'] or 'None'}[/white]"
+                layout["left"].update(Panel(Align.left(info, vertical="middle"), title="Overview", border_style="cyan", padding=(1, 3)))
+            
+            elif state["mode"] == "select":
+                info = f"[bold yellow]Select {state['field']}[/bold yellow]\n\n"
+                for i, s_opt in enumerate(state["sub_options"]):
+                    if i == state["sub_idx"]: info += f"> [bold yellow]{s_opt}[/bold yellow]\n"
+                    else: info += f"  {s_opt}\n"
+                layout["left"].update(Panel(Align.center(info, vertical="middle"), title=f"Browse {state['field']}", border_style="yellow"))
+
+            elif state["mode"] == "preview":
+                # Use asset_id_preview for live scrolling, asset_id for locked action menu
+                aid = state.get("asset_id_preview") or state.get("asset_id")
+                info = f"[bold cyan]Asset: {aid}[/bold cyan] ({state['category'][:-1]})\n\n"
+                content = state.get("asset_content", "")
+                info += content[:800] + ("..." if len(content) > 800 else "")
+                layout["left"].update(Panel(Align.left(info, vertical="middle"), title="Asset Preview", border_style="cyan", padding=(1, 3)))
+
+            elif state["mode"] == "loading":
+                info = f"[bold yellow]Loading {state['field']}...[/bold yellow]\n\n"
+                layout["left"].update(Panel(Align.center(info, vertical="middle"), title="Please Wait", border_style="yellow"))
+
+            # Right Panel (Menu)
+            menu_text = ""
+            opts = state.get("active_menu", categories)
+            for i, opt in enumerate(opts):
+                if i == state["main_idx"]: menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
+                else: menu_text += f"  {opt}\n"
+            layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Asset Menu", border_style="yellow"))
+            return layout
+
+        state["active_menu"] = categories
+        with Live(render_assets(state), screen=True, auto_refresh=False) as live:
+            with input_obj.raw_mode():
                 while True:
-                    action = questionary.select(f"{asset_id}", choices=["Rename Globally", "Edit Description", "AI Generate Description", "Back"]).ask()
-                    if action == "Back" or action is None: break
-                    if action == "Rename Globally":
-                        ni = questionary.text(f"New ID for {asset_id}").ask()
-                        if ni:
-                            res = requests.post(f"{self.base_url}/games/{game_id}/assets/rename", json={"category": category, "old_id": asset_id, "new_id": ni})
-                            if res.status_code == 200: asset_id = ni; break
-                    elif action == "Edit Description":
-                        res = requests.get(f"{self.base_url}/games/{game_id}/assets/{category}/{asset_id}")
-                        initial_val = res.json().get("content", "")
-                        method = questionary.select("How to edit?", choices=["Inline", "External Editor", "Back"]).ask()
-                        if method == "Inline":
-                            nd = questionary.text("Description?", default=initial_val).ask()
-                        elif method == "External Editor":
-                            nd = edit_text_in_external_editor(initial_val)
-                        else: nd = None
-                        
-                        if nd is not None:
-                            requests.post(f"{self.base_url}/games/{game_id}/sessions/any/edit", json={"category": "reference", "action": "update", "sub_category": category[:-1], "target": asset_id, "content": nd})
-                    elif action == "AI Generate Description":
-                        with console.status("Generating..."):
-                            requests.post(f"{self.base_url}/games/{game_id}/assets/generate", json={"category": category, "target": asset_id})
-                    questionary.text("[Enter] to continue").ask()
+                    try:
+                        live.update(render_assets(state)); live.refresh()
+                        keys = input_obj.read_keys()
+                        if not keys:
+                            time.sleep(0.05); continue
+                        for key in keys:
+                            if key.key == Keys.Up or key.key == Keys.Down:
+                                old_idx = state["main_idx"]
+                                if key.key == Keys.Up: state["main_idx"] = (state["main_idx"] - 1) % len(state["active_menu"])
+                                else: state["main_idx"] = (state["main_idx"] + 1) % len(state["active_menu"])
+                                
+                                # Preview logic - Only if list changed
+                                if state["category"] and not state["asset_id"] and old_idx != state["main_idx"]:
+                                    choice = state["active_menu"][state["main_idx"]]
+                                    if choice not in ["Add New", "Back"]:
+                                        state["mode"], state["asset_id_preview"] = "preview", choice
+                                        state["asset_content"] = fetch_preview(state["category"], choice)
+                                    else:
+                                        state["mode"] = "view"; state["asset_id_preview"] = None
+                            
+                            elif key.key == Keys.Enter or key.key == Keys.ControlM:
+                                choice = state["active_menu"][state["main_idx"]]
+                                if choice == "Back":
+                                    if state["active_menu"] == categories: return
+                                    elif state["category"] and state["asset_id"]: # In action menu
+                                        state["asset_id"] = None
+                                        # Reload assets list
+                                        state["mode"], state["field"] = "loading", state["category"]
+                                        live.update(render_assets(state)); live.refresh()
+                                        res = requests.get(f"{self.base_url}/games/{game_id}/assets/{state['category'].lower()}")
+                                        state["active_menu"] = res.json()["assets"] + ["Add New", "Back"]
+                                        state["main_idx"] = 0; state["mode"] = "view"
+                                        # Immediate preview if first is asset
+                                        if state["active_menu"][0] not in ["Add New", "Back"]:
+                                            state["mode"], state["asset_id_preview"] = "preview", state["active_menu"][0]
+                                            state["asset_content"] = fetch_preview(state["category"], state["active_menu"][0])
+                                    else: # In asset list
+                                        state["category"] = None; state["active_menu"] = categories; state["main_idx"] = 0; state["mode"] = "view"; state["asset_id_preview"] = None
+                                    continue
+
+                                # 1. Category Selection
+                                if state["active_menu"] == categories:
+                                    state["category"] = choice
+                                    state["asset_id"] = None; state["asset_id_preview"] = None
+                                    state["mode"], state["field"] = "loading", choice
+                                    live.update(render_assets(state)); live.refresh()
+                                    res = requests.get(f"{self.base_url}/games/{game_id}/assets/{choice.lower()}")
+                                    state["active_menu"] = res.json()["assets"] + ["Add New", "Back"]
+                                    state["main_idx"] = 0; state["mode"] = "view"
+                                    # Trigger immediate preview if first item is an asset
+                                    if state["active_menu"][0] not in ["Add New", "Back"]:
+                                        state["mode"], state["asset_id_preview"] = "preview", state["active_menu"][0]
+                                        state["asset_content"] = fetch_preview(choice, state["active_menu"][0])
+                                
+                                # 2. Asset Selection
+                                elif state["category"] and not state["asset_id"]:
+                                    if choice == "Add New":
+                                        live.stop(); console.clear(); console.print(render_assets(state))
+                                        new_id = questionary.text("Unique ID?").ask()
+                                        if new_id:
+                                            state["asset_id"] = new_id; state["asset_id_preview"] = new_id
+                                            state["active_menu"] = ["Rename Globally", "Edit Description", "AI Generate Description", "Back"]
+                                            state["main_idx"] = 0; state["mode"] = "preview"; state["asset_content"] = ""
+                                        live.start()
+                                    else:
+                                        state["asset_id"] = choice; state["asset_id_preview"] = choice
+                                        state["mode"], state["field"] = "loading", choice
+                                        live.update(render_assets(state)); live.refresh()
+                                        res = requests.get(f"{self.base_url}/games/{game_id}/assets/{state['category'].lower()}/{choice}")
+                                        state["asset_content"] = res.json().get("content", "")
+                                        state["active_menu"] = ["Rename Globally", "Edit Description", "AI Generate Description", "Back"]
+                                        state["main_idx"] = 0; state["mode"] = "preview"
+
+                                # 3. Action Selection
+                                elif state["asset_id"]:
+                                    if choice == "Rename Globally":
+                                        live.stop(); console.clear(); console.print(render_assets(state))
+                                        ni = questionary.text(f"New ID for {state['asset_id']}").ask()
+                                        if ni:
+                                            res = requests.post(f"{self.base_url}/games/{game_id}/assets/rename", json={"category": state["category"].lower(), "old_id": state["asset_id"], "new_id": ni})
+                                            if res.status_code == 200: state["asset_id"] = ni
+                                        live.start()
+                                    elif choice == "Edit Description":
+                                        res_config = requests.get(f"{self.base_url}/config")
+                                        editor = res_config.json().get("editor", "")
+                                        live.stop(); console.clear(); console.print(render_assets(state))
+                                        if editor and editor != "None":
+                                            console.print(f"\n[yellow]Opening {editor} for {state['asset_id']}...[/yellow]")
+                                            time.sleep(0.3); console.clear()
+                                            nv = edit_text_in_external_editor(state["asset_content"])
+                                        else:
+                                            nv = questionary.text("Description?", default=state["asset_content"]).ask()
+                                        
+                                        if nv is not None:
+                                            requests.post(f"{self.base_url}/games/{game_id}/sessions/any/edit", json={"category": "reference", "action": "update", "sub_category": state["category"].lower()[:-1], "target": state["asset_id"], "content": nv})
+                                            state["asset_content"] = nv
+                                        live.start()
+                                    elif choice == "AI Generate Description":
+                                        state["mode"], state["field"] = "loading", "AI Generation"
+                                        live.update(render_assets(state)); live.refresh()
+                                        requests.post(f"{self.base_url}/games/{game_id}/assets/generate", json={"category": state["category"].lower(), "target": state["asset_id"]})
+                                        # Reload
+                                        res = requests.get(f"{self.base_url}/games/{game_id}/assets/{state['category'].lower()}/{state['asset_id']}")
+                                        state["asset_content"] = res.json().get("content", "")
+                                        state["mode"] = "preview"
+
+                            elif key.key == Keys.Escape:
+                                if state["active_menu"] == categories: return
+                                elif state["category"] and state["asset_id"]:
+                                    state["asset_id"] = None
+                                    res = requests.get(f"{self.base_url}/games/{game_id}/assets/{state['category'].lower()}")
+                                    state["active_menu"] = res.json()["assets"] + ["Add New", "Back"]
+                                    state["main_idx"] = 0; state["mode"] = "view"
+                                else:
+                                    state["category"] = None; state["active_menu"] = categories; state["main_idx"] = 0; state["mode"] = "view"
+
+                    except Exception as e:
+                        live.stop(); console.print(f"[red]Error in Asset Flow: {e}[/red]"); time.sleep(2); live.start()
