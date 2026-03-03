@@ -267,16 +267,37 @@ class GameHub:
             except: pass
             return "[No description available]"
 
+        def fetch_category_assets(cat):
+            if cat == "Back": return []
+            try:
+                res = requests.get(f"{self.base_url}/games/{game_id}/assets/{cat.lower()}", timeout=0.5)
+                if res.status_code == 200: return res.json().get("assets", [])
+            except: pass
+            return []
+
         def render_assets(state):
             layout = make_intro_layout()
             
             # Left Panel Content
             if state["mode"] == "view":
-                info = "[bold cyan]Asset Manager[/bold cyan]\n\n"
-                info += "Select a category on the right to browse and edit game assets.\n\n"
-                info += "[dim]Current Selection:[/dim]\n"
-                info += f"Category: [white]{state['category'] or 'None'}[/white]\n"
-                info += f"Asset: [white]{state['asset_id'] or 'None'}[/white]"
+                info = f"[bold cyan]Asset Manager[/bold cyan]\n\n"
+                if state.get("category_preview"):
+                    cat = state["category_preview"]
+                    info += f"[bold yellow]Category: {cat}[/bold yellow]\n"
+                    assets = state.get("category_assets", [])
+                    if assets:
+                        info += "\n[dim]Available Assets:[/dim]\n"
+                        for a in assets[:15]:
+                            info += f"• {a}\n"
+                        if len(assets) > 15:
+                            info += f"[dim]... and {len(assets)-15} more[/dim]"
+                    else:
+                        info += "\n[dim italic]No assets found in this category.[/dim italic]"
+                else:
+                    info += "Select a category on the right to browse and edit game assets.\n\n"
+                    info += "[dim]Current Selection:[/dim]\n"
+                    info += f"Category: [white]{state['category'] or 'None'}[/white]\n"
+                    info += f"Asset: [white]{state['asset_id'] or 'None'}[/white]"
                 layout["left"].update(Panel(Align.left(info, vertical="middle"), title="Overview", border_style="cyan", padding=(1, 3)))
             
             elif state["mode"] == "select":
@@ -308,6 +329,10 @@ class GameHub:
             return layout
 
         state["active_menu"] = categories
+        # Initial preview
+        state["category_preview"] = categories[0]
+        state["category_assets"] = fetch_category_assets(categories[0])
+        
         with Live(render_assets(state), screen=True, auto_refresh=False) as live:
             with input_obj.raw_mode():
                 while True:
@@ -322,9 +347,18 @@ class GameHub:
                                 if key.key == Keys.Up: state["main_idx"] = (state["main_idx"] - 1) % len(state["active_menu"])
                                 else: state["main_idx"] = (state["main_idx"] + 1) % len(state["active_menu"])
                                 
-                                # Preview logic - Only if list changed
-                                if state["category"] and not state["asset_id"] and old_idx != state["main_idx"]:
-                                    choice = state["active_menu"][state["main_idx"]]
+                                choice = state["active_menu"][state["main_idx"]]
+                                
+                                # 1. Category Level Preview
+                                if state["active_menu"] == categories:
+                                    if choice != "Back":
+                                        state["category_preview"] = choice
+                                        state["category_assets"] = fetch_category_assets(choice)
+                                    else:
+                                        state["category_preview"] = None; state["category_assets"] = []
+
+                                # 2. Asset Level Preview logic - Only if list changed
+                                elif state["category"] and not state["asset_id"] and old_idx != state["main_idx"]:
                                     if choice not in ["Add New", "Back"]:
                                         state["mode"], state["asset_id_preview"] = "preview", choice
                                         state["asset_content"] = fetch_preview(state["category"], choice)
