@@ -98,3 +98,17 @@ confront_broker:
             jump intimidate_broker
         "Offer credits":
             jump buy_data
+
+
+intimidate_broker:
+    talk anya "I don't have time for your stalling, broker."
+    "I slam my hand against the wall next to his head, the cybernetic servos in my arm whining audibly."
+    talk broker "Whoa! Easy! I'm just the middleman!"
+    talk anya "Middlemen get caught in the crossfire. Give me the drive, or I leave you for the extraction team to find."
+    "The broker’s eyes dart around the club, terrified."
+    talk broker "Fine! It's in my pocket. But you have to promise not to slice me if I reach for it."
+    choice:
+        "Just get it out.":
+            jump take_drive
+        "Show me your hands first.":
+            jump check_hands

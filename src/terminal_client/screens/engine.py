@@ -22,10 +22,18 @@ class GameEngine:
         self.focus = "actions"
         self.action_idx = 0
         self.choice_idx = 0
-        # New order: Next, Back, Reload Section, Edit Assets, View Script, Exit Game
-        self.actions = ["Next", "Back", "Reload Section", "Edit Assets", "View Script", "Exit Game"]
         self.console = custom_console or console
         self.base_url = base_url or BASE_URL
+        
+        # Determine actions based on editor availability
+        self.actions = ["Next", "Back", "Reload Section", "Edit Assets", "View Script"]
+        try:
+            res = requests.get(f"{self.base_url}/config")
+            editor = res.json().get("editor")
+            if editor and editor != "None":
+                self.actions.append("Edit Script")
+        except: pass
+        self.actions.append("Exit Game")
 
     def get_actions_row(self):
         parts = []
@@ -225,14 +233,33 @@ class GameEngine:
                                 elif action == "Back": cmd = "B"
                                 elif action == "Reload Section": cmd = "R"
                                 elif action == "Edit Assets": cmd = "DO_EDIT"
+                                elif action == "Edit Script": cmd = "EDIT_SCRIPT"
                                 elif action == "View Script": self.show_script = not self.show_script
                                 elif action == "Exit Game": return
                         elif key.key == Keys.Escape or key.key == Keys.ControlC: return
                     
                     if cmd:
-                        if cmd == "DO_EDIT":
+                        if cmd == "DO_EDIT" or cmd == "EDIT_SCRIPT":
                             live.stop()
-                            self.handle_edit()
+                            if cmd == "EDIT_SCRIPT":
+                                # Find current line index in file for external editor
+                                p = f"games/{self.game_id}/phase1.narrat"
+                                with open(p, "r") as f: lines = f.readlines()
+                                file_idx = -1
+                                curr_label, l_idx = self.data.get("current_label"), self.data.get("line_index", 0)
+                                for i, line in enumerate(lines):
+                                    if re.match(rf"^{curr_label}:", line.strip()):
+                                        file_idx = i; break
+                                if file_idx != -1:
+                                    count = 0
+                                    for i in range(file_idx + 1, len(lines)):
+                                        if not lines[i].strip() or lines[i].strip().startswith("//"): continue
+                                        if re.match(r"^[\w_]+:", lines[i].strip()): break
+                                        if count == l_idx: file_idx = i; break
+                                        count += 1
+                                open_in_external_editor(p, file_idx + 1)
+                            else:
+                                self.handle_edit()
                             live.start()
                             res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "B_REPROCESS"})
                             self.data = res.json()
@@ -266,16 +293,20 @@ class GameEngine:
         p = f"games/{self.game_id}/phase1.narrat"
         with open(p, "r") as f: lines = f.readlines()
         idx = -1
+        curr_label, l_idx = self.data.get("current_label"), self.data.get("line_index", 0)
         for i, line in enumerate(lines):
-            if re.match(rf"^(?:label\s+)?{self.data['current_label']}:\s*(?://.*)?$", line.strip()):
-                idx = i + self.data.get("line_index", 0); break
-        if idx == -1: return
-        et = questionary.select("Edit?", choices=["Background", "Character", "Dialogue", "Choice", "Scene", "Open in External Editor", "Back"]).ask()
-        if et == "Back" or et is None: return
+            if re.match(rf"^(?:label\s+)?{curr_label}:\s*(?://.*)?$", line.strip()):
+                idx = i; break
+        if idx != -1:
+            count = 0
+            for i in range(idx + 1, len(lines)):
+                if not lines[i].strip() or lines[i].strip().startswith("//"): continue
+                if re.match(r"^[\w_]+:", lines[i].strip()): break
+                if count == l_idx: idx = i; break
+                count += 1
         
-        if et == "Open in External Editor":
-            open_in_external_editor(f"games/{self.game_id}/phase1.narrat", idx + 1)
-            return
+        et = questionary.select("What to edit?", choices=["Dialogue", "Background", "Character", "Scene", "Back"]).ask()
+        if et == "Back" or et is None: return
 
         if et == "Dialogue":
             action = questionary.select("Action", choices=["Edit Manually", "Edit in External Editor", "Rewrite with AI", "Back"]).ask()
@@ -293,4 +324,45 @@ class GameEngine:
                     with console.status("AI is rewriting..."):
                         res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit/ai", json={"target": str(idx), "content": instr})
                     if res.status_code == 200: questionary.press_any_key_to_continue().ask()
+        
+        elif et == "Background":
+            bg = self.data.get("background", "None")
+            if bg == "None": return
+            res = requests.get(f"{self.base_url}/games/{self.game_id}/assets/backgrounds/{bg}")
+            cur = res.json().get("content", "")
+            method = questionary.select("Edit Method", choices=["Inline", "External Editor", "Back"]).ask()
+            if method == "External Editor":
+                from src.terminal_client.utils import edit_text_in_external_editor
+                nv = edit_text_in_external_editor(cur)
+            elif method == "Inline":
+                nv = questionary.text("Description", default=cur).ask()
+            else: nv = None
+            if nv is not None:
+                requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "reference", "action": "update", "sub_category": "background", "target": bg, "content": nv})
+
+        elif et == "Character":
+            char = self.data.get("character")
+            if not char: return
+            ctype = questionary.select("Edit what?", choices=["Profile", "Description", "Back"]).ask()
+            if ctype == "Back" or ctype is None: return
+            res = requests.get(f"{self.base_url}/games/{self.game_id}/assets/characters/{char}", params={"type": ctype.lower()})
+            cur = res.json().get("content", "")
+            method = questionary.select("Edit Method", choices=["Inline", "External Editor", "Back"]).ask()
+            if method == "External Editor":
+                from src.terminal_client.utils import edit_text_in_external_editor
+                nv = edit_text_in_external_editor(cur)
+            elif method == "Inline":
+                nv = questionary.text(ctype, default=cur).ask()
+            else: nv = None
+            if nv is not None:
+                requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "reference", "action": "update", "sub_category": "character", "target": char, "content": nv, "meta": {"type": ctype.lower()}})
+
+        elif et == "Scene":
+            sc = self.data.get("variables", {}).get("__current_scene")
+            if not sc: return
+            res = requests.get(f"{self.base_url}/games/{self.game_id}/assets/scenes/{sc}")
+            cur = res.json().get("content", "")
+            nv = questionary.text("Scene Description", default=cur).ask()
+            if nv:
+                requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "reference", "action": "update", "sub_category": "scene", "target": sc, "content": nv})
         # Other edit types omitted for brevity in this fix...
