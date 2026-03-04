@@ -59,7 +59,8 @@ def get_menu_choice(options, make_layout_func):
                 live.refresh()
                 keys = input_obj.read_keys()
                 if not keys:
-                    time.sleep(0.05)
+                    if os.getenv("NARRAT_TEST_MODE") != "1":
+                        time.sleep(0.05)
                     continue
                 for key in keys:
                     if key.key == Keys.Up: idx = (idx - 1) % len(options)

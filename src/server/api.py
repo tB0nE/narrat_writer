@@ -175,20 +175,77 @@ async def create_game(req: CreateGameRequest):
     with open(os.path.join(game_dir, "phase1.narrat"), "w") as f: f.write(initial_script)
     return {"status": "success", "game_id": req.name}
 
+@app.post("/games/{game_id}/sessions/{session_id}/generate")
+async def generate_more_story(game_id: str, session_id: str, req: Dict[str, Any]):
+    target = req.get("target")
+    state = load_session(game_id, session_id)
+    meta = load_metadata(game_id)
+    
+    context = ""
+    for entry in state.dialogue_log[-10:]:
+        context += f"{entry['character']}: {entry['text']}\n"
+    
+    prompt = prompts.GENERATE_STORY_PROMPT.format(
+        target_label=target,
+        context=context,
+        metadata=meta.model_dump_json(indent=2) if meta else "No metadata"
+    )
+    
+    try:
+        new_script = call_llm(prompt, game_id=game_id)
+        new_script = re.sub(r'^```[\w]*\s*\n?', '', new_script, flags=re.MULTILINE)
+        new_script = re.sub(r'\n?```$', '', new_script, flags=re.MULTILINE)
+        p = get_game_path(game_id, "phase1.narrat")
+        with open(p, "a") as f: f.write("\n\n" + new_script + "\n")
+        return {"status": "success"}
+    except Exception as e: raise HTTPException(status_code=502, detail=str(e))
+
+@app.post("/games/{game_id}/sessions/{session_id}/continue")
+async def continue_story(game_id: str, session_id: str):
+    state = load_session(game_id, session_id)
+    meta = load_metadata(game_id)
+    
+    next_label = f"cont_{state.current_label}_{int(time.time())}"
+    context = ""
+    for entry in state.dialogue_log[-10:]:
+        context += f"{entry['character']}: {entry['text']}\n"
+    
+    prompt = prompts.CONTINUE_STORY_PROMPT.format(
+        current_label=state.current_label,
+        next_label=next_label,
+        context=context,
+        metadata=meta.model_dump_json(indent=2) if meta else "No metadata"
+    )
+    
+    try:
+        new_script = call_llm(prompt, game_id=game_id)
+        new_script = re.sub(r'^```[\w]*\s*\n?', '', new_script, flags=re.MULTILINE)
+        new_script = re.sub(r'\n?```$', '', new_script, flags=re.MULTILINE)
+        p = get_game_path(game_id, "phase1.narrat")
+        with open(p, "a") as f: f.write("\n\n" + new_script + "\n")
+        
+        # Point the state to the new label
+        state.current_label = next_label
+        state.line_index = 0
+        save_session(game_id, state)
+        return {"status": "success", "next_label": next_label}
+    except Exception as e: raise HTTPException(status_code=502, detail=str(e))
+
 @app.post("/games/{game_id}/sessions/{session_id}/step")
 async def step_game(game_id: str, session_id: str, update: GameUpdate):
     state = load_session(game_id, session_id)
     parser = NarratParser(game_id)
-    if state.current_label not in parser.labels:
-        return DialogueResponse(type="missing_label", meta={"target": state.current_label}, text=f"Label '{state.current_label}' is missing.", variables=state.variables, dialogue_log=state.dialogue_log)
     if update.command == "R":
-        meta = load_metadata(game_id)
-        state.current_label, state.line_index = (meta.starting_point if meta else "main"), 0
+        state.line_index = 0
         return await process_current_step(game_id, state, parser, "B_REPROCESS")
     if update.command == "B":
         if len(state.history) > 1:
-            state.history.pop(); prev = state.history.pop()
-            state = SessionState(**prev); save_session(game_id, state)
+            # Current state is always at the top, we want to discard it and 
+            # go back to the state that was saved BEFORE the previous blocking line.
+            state.history.pop() # Remove current
+            prev_state_dict = state.history.pop()
+            state = SessionState(**prev_state_dict)
+            save_session(game_id, state)
             return await process_current_step(game_id, state, parser, "B_REPROCESS")
     return await process_current_step(game_id, state, parser, update.command)
 
@@ -208,8 +265,7 @@ async def get_asset(game_id: str, category: str, asset_id: str, type: str = "des
 
 @app.post("/games/{game_id}/assets/generate")
 async def generate_asset(game_id: str, req: GenerateRequest):
-    target, cat = req.target, req.get("category", "characters")
-    sub = req.get("sub_type", "description")
+    target, cat, sub = req.target, req.category, req.sub_type
     meta = load_metadata(game_id)
     prompt = prompts.ASSET_DESCRIPTION_PROMPT.format(asset_id=target, asset_type=f"{cat} {sub}", metadata=meta.model_dump_json(indent=2) if meta else "No metadata")
     try:
@@ -223,13 +279,69 @@ async def generate_asset(game_id: str, req: GenerateRequest):
 @app.post("/games/{game_id}/assets/rename")
 async def rename_asset(game_id: str, req: Dict[str, str]):
     cat, old_id, new_id = req.get("category"), req.get("old_id"), req.get("new_id")
-    # (Simplified rename logic omitted for brevity, but should be re-implemented if needed)
+    if not all([cat, old_id, new_id]): raise HTTPException(status_code=400, detail="Missing data")
+    meta = load_metadata(game_id)
+    if not meta: raise HTTPException(status_code=404, detail="Not found")
+
+    def apply_smart_rename(text, old, new):
+        def replace_keep_case(match):
+            word = match.group(0)
+            if word.isupper(): return new.upper()
+            if word[0].isupper(): return new.capitalize()
+            return new.lower()
+        return re.sub(rf'\b{old}\b', replace_keep_case, text, flags=re.IGNORECASE)
+
+    # 1. Update Metadata
+    meta.title = apply_smart_rename(meta.title, old_id, new_id)
+    meta.summary = apply_smart_rename(meta.summary, old_id, new_id)
+    if meta.plot_outline:
+        meta.plot_outline = apply_smart_rename(meta.plot_outline, old_id, new_id)
+    
+    if cat == "characters":
+        meta.characters = [new_id if c.lower() == old_id.lower() or c == old_id else c for c in meta.characters]
+        # Ensure consistent naming if they used a proper name in characters list
+        if any(c.lower() == new_id.lower() for c in meta.characters):
+             meta.characters = [new_id.capitalize() if c.lower() == new_id.lower() else c for c in meta.characters]
+    
+    save_metadata(game_id, meta)
+
+    # 2. Rename Files
+    if cat == "characters":
+        old_p = get_game_path(game_id, "reference", "characters", old_id)
+        new_p = get_game_path(game_id, "reference", "characters", new_id)
+    else:
+        old_p = get_game_path(game_id, "reference", cat, f"{old_id}.txt")
+        new_p = get_game_path(game_id, "reference", cat, f"{new_id}.txt")
+    
+    if os.path.exists(old_p):
+        if cat == "characters":
+            os.rename(old_p, new_p)
+            for f in os.listdir(new_p):
+                if old_id.lower() in f.lower():
+                    os.rename(os.path.join(new_p, f), os.path.join(new_p, f.lower().replace(old_id.lower(), new_id.lower())))
+        else: os.rename(old_p, new_p)
+
+    # 3. Update Script
+    sp = get_game_path(game_id, "phase1.narrat")
+    if os.path.exists(sp):
+        with open(sp, "r") as f: content = f.read()
+        with open(sp, "w") as f: f.write(apply_smart_rename(content, old_id, new_id))
+
     return {"status": "success"}
 
 @app.post("/games/{game_id}/sessions/{session_id}/edit")
 async def edit_game(game_id: str, session_id: str, update: Dict[str, Any]):
     cat, action, target, content = update.get("category"), update.get("action"), update.get("target"), update.get("content")
-    if cat == "script":
+    if cat == "reference":
+        sub = update.get("sub_category", "background")
+        if sub == "character":
+            p = get_game_path(game_id, "reference", "characters", target, f"{target}_{update.get('meta', {}).get('type', 'profile')}.txt")
+        else:
+            p = get_game_path(game_id, "reference", f"{sub}s", f"{target}.txt")
+        
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as f: f.write(content)
+    elif cat == "script":
         p = get_game_path(game_id, "phase1.narrat")
         with open(p, "r") as f: lines = f.readlines()
         lines[int(target)] = f"{re.match(r'^\s*', lines[int(target)]).group(0)}{content}\n"
@@ -238,6 +350,27 @@ async def edit_game(game_id: str, session_id: str, update: Dict[str, Any]):
         meta = load_metadata(game_id)
         if meta: setattr(meta, target, content); save_metadata(game_id, meta)
     return {"status": "success"}
+
+@app.post("/games/{game_id}/sessions/{session_id}/edit/ai")
+async def edit_game_ai(game_id: str, session_id: str, update: Dict[str, Any]):
+    target_idx = int(update.get("target"))
+    instruction = update.get("content")
+    
+    p = get_game_path(game_id, "phase1.narrat")
+    with open(p, "r") as f: lines = f.readlines()
+    
+    old_line = lines[target_idx].strip()
+    meta = load_metadata(game_id)
+    
+    prompt = f"Original line: {old_line}\nInstruction: {instruction}\nContext: {meta.model_dump_json() if meta else ''}\nRewrite the line using valid narrat syntax. Return ONLY the line."
+    new_content = call_llm(prompt, game_id=game_id).strip()
+    # Clean possible markdown
+    new_content = new_content.replace("```narrat", "").replace("```", "").strip()
+    
+    lines[target_idx] = f"{re.match(r'^\s*', lines[target_idx]).group(0)}{new_content}\n"
+    with open(p, "w") as f: f.writelines(lines)
+    
+    return {"status": "success", "new_content": new_content}
 
 @app.post("/games/{game_id}/refine/options")
 async def refine_metadata_options(game_id: str, req: Dict[str, str]):
@@ -270,13 +403,26 @@ async def regenerate_metadata(game_id: str, req: CreateGameRequest):
 async def list_saves(game_id: str):
     path = get_game_path(game_id, "saves")
     if not os.path.exists(path): return {"saves": []}
+    
     saves = []
+    # Only process files changed in the last hour to speed up?
+    # No, let's just make it more robust.
     for f in os.listdir(path):
         if f.endswith(".json"):
             sid = f.replace(".json", "")
             try:
+                full_p = os.path.join(path, f)
+                mtime = os.path.getmtime(full_p)
+                
+                # Fast check: Read only first few lines if possible or just rely on file
+                # For now, we still load but maybe we can optimize load_session
                 st = load_session(game_id, sid)
-                saves.append({"id": sid, "label": st.current_label, "last_text": st.dialogue_log[-1]["text"] if st.dialogue_log else "Start", "timestamp": os.path.getmtime(os.path.join(path, f))})
+                saves.append({
+                    "id": sid, 
+                    "label": st.current_label, 
+                    "last_text": st.dialogue_log[-1]["text"] if st.dialogue_log else "Start", 
+                    "timestamp": mtime
+                })
             except: continue
     saves.sort(key=lambda x: x["timestamp"], reverse=True)
     return {"saves": saves}

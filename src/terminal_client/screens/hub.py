@@ -22,23 +22,65 @@ class GameHub:
         self.base_url = base_url
 
     def run(self, game_id):
-        """Management hub for a specific game ID."""
+        """Management hub for a specific game ID using a persistent Live context."""
+        input_obj = create_input()
+        
         while True:
             res = requests.get(f"{self.base_url}/games/{game_id}/metadata")
             meta = res.json()
             options = ["Start New Game", "Load Game", "Manage Assets", "Edit Game", "Validate Script", "Back"]
-            choice = get_menu_choice(options, lambda opts, idx: self.render_game_hub(opts, idx, meta))
-            if choice == "Back" or choice is None: return
-            if choice == "Start New Game":
-                timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M")
-                sid = f"{game_id}_{timestamp}"
-                from src.terminal_client.screens.engine import GameEngine
-                engine = GameEngine(game_id, sid, self.console, self.base_url)
-                engine.run()
-            elif choice == "Load Game": self.save_manager_flow(game_id)
-            elif choice == "Manage Assets": self.asset_manager_flow(game_id, meta)
-            elif choice == "Edit Game": self.edit_metadata_flow(game_id, meta)
-            elif choice == "Validate Script": self.validate_script_flow(game_id)
+            
+            with Live(self.render_game_hub(options, 0, meta), screen=True, auto_refresh=False) as live:
+                idx = 0
+                with input_obj.raw_mode():
+                    while True:
+                        live.update(self.render_game_hub(options, idx, meta)); live.refresh()
+                        keys = input_obj.read_keys()
+                        if not keys:
+                            time.sleep(0.05); continue
+                        
+                        action_choice = None
+                        for key in keys:
+                            if key.key == Keys.Up: idx = (idx - 1) % len(options)
+                            elif key.key == Keys.Down: idx = (idx + 1) % len(options)
+                            elif key.key == Keys.Enter or key.key == Keys.ControlM:
+                                action_choice = options[idx]
+                            elif key.key == Keys.Escape: return # Back to launcher
+                        
+                        if action_choice:
+                            if action_choice == "Back": return
+                            
+                            if action_choice == "Start New Game":
+                                live.stop()
+                                timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M")
+                                sid = f"{game_id}_{timestamp}"
+                                from src.terminal_client.screens.engine import GameEngine
+                                engine = GameEngine(game_id, sid, self.console, self.base_url)
+                                engine.run()
+                                break # Break inner loop to refresh meta if needed
+                            
+                            elif action_choice == "Load Game":
+                                self.save_manager_flow_shared(game_id, live, input_obj)
+                                break # Refresh
+                            
+                            elif action_choice == "Manage Assets":
+                                # For now we keep individual loops but we should unify them all eventually
+                                live.stop()
+                                self.asset_manager_flow(game_id, meta)
+                                live.start()
+                                break
+                            
+                            elif action_choice == "Edit Game":
+                                live.stop()
+                                self.edit_metadata_flow(game_id, meta)
+                                live.start()
+                                break
+                            
+                            elif action_choice == "Validate Script":
+                                live.stop()
+                                self.validate_script_flow_shared(game_id)
+                                live.start()
+                                break
 
     def validate_script_flow(self, game_id):
         """Calls the validation API and displays results in the UI."""
@@ -65,6 +107,27 @@ class GameHub:
             live.refresh()
             questionary.press_any_key_to_continue().ask()
 
+    def render_save_manager(self, opts, idx, saves):
+        """Compatibility wrapper for tests."""
+        state = {"saves": saves, "main_idx": idx}
+        # In a real run, this is inside save_manager_flow_shared
+        # but for standalone test rendering we provide this
+        layout = make_intro_layout()
+        if idx < len(saves):
+            s = saves[idx]
+            dt = datetime.fromtimestamp(s['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+            info = f"[bold cyan]Save: {s['id']}[/bold cyan]\n[dim]{dt}[/dim]\n\n"
+            info += f"[bold white]Location:[/bold white] {s['label']}\n\n"
+            info += f"[bold white]Last Dialogue:[/bold white]\n[italic]\"{s['last_text']}\"[/italic]"
+        else: info = "[dim italic]Back to game hub.[/dim italic]"
+        layout["left"].update(Panel(Align.left(info, vertical="middle"), title="Save Preview", border_style="cyan", padding=(1, 3)))
+        menu_text = ""
+        for i, opt in enumerate(opts):
+            if i == idx: menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
+            else: menu_text += f"  {opt}\n"
+        layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Saves", border_style="yellow"))
+        return layout
+
     def render_game_hub(self, options, selected_idx, meta):
         """Renders the game-specific hub screen with metadata summary and interactive menu."""
         layout = make_intro_layout()
@@ -87,43 +150,90 @@ class GameHub:
         return layout
 
     def save_manager_flow(self, game_id):
-        """Interactive flow to list, load, and delete saves."""
-        while True:
-            res = requests.get(f"{self.base_url}/games/{game_id}/saves")
-            saves = res.json()["saves"]
+        # Compatibility wrapper
+        with Live(None, screen=True, auto_refresh=False) as live:
+            self.save_manager_flow_shared(game_id, live, create_input())
+
+    def save_manager_flow_shared(self, game_id, live, input_obj):
+        """Interactive flow to list, load, and delete saves using a shared Live context."""
+        state = {"mode": "view", "save_id": None, "main_idx": 0, "saves": []}
+
+        def fetch_saves():
+            try:
+                res = requests.get(f"{self.base_url}/games/{game_id}/saves", timeout=2)
+                return res.json()["saves"]
+            except: return []
+
+        def render_saves(state):
+            layout = make_intro_layout()
+            saves = state["saves"]
             if not saves:
-                questionary.text("No saves found. [Enter] to continue").ask()
-                return
-            def render_save(opts, idx, saves=saves):
-                layout = make_intro_layout()
-                if idx < len(saves):
-                    s = saves[idx]
-                    dt = datetime.fromtimestamp(s['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
-                    info = f"[bold cyan]Save: {s['id']}[/bold cyan]\n[dim]{dt}[/dim]\n\n"
-                    info += f"[bold white]Location:[/bold white] {s['label']}\n\n"
-                    info += f"[bold white]Last Dialogue:[/bold white]\n[italic]\"{s['last_text']}\"[/italic]"
-                else: 
-                    info = "[dim italic]Back to game hub.[/dim italic]"
-                
-                layout["left"].update(Panel(Align.left(info, vertical="middle"), title="Save Preview", border_style="cyan", padding=(1, 3)))
-                menu_text = ""
-                for i, opt in enumerate(opts):
-                    if i == idx: menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
-                    else: menu_text += f"  {opt}\n"
-                layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Saves", border_style="yellow"))
-                return layout
-            options = [s["id"] for s in saves] + ["Back"]
-            choice = get_menu_choice(options, render_save)
-            if choice == "Back" or choice is None: return
-            action = questionary.select(f"Save: {choice}", choices=["Load Save", "Delete Save", "Back"]).ask()
-            if action == "Load Save":
-                from src.terminal_client.screens.engine import GameEngine
-                engine = GameEngine(game_id, choice, self.console, self.base_url)
-                engine.run()
-                return
-            elif action == "Delete Save":
-                if questionary.confirm(f"Delete '{choice}'?").ask():
-                    requests.delete(f"{self.base_url}/games/{game_id}/saves/{choice}")
+                info = "[dim italic]No saves found for this game.[/dim italic]"
+            elif state["main_idx"] < len(saves):
+                s = saves[state["main_idx"]]
+                dt = datetime.fromtimestamp(s['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+                info = f"[bold cyan]Save: {s['id']}[/bold cyan]\n[dim]{dt}[/dim]\n\n"
+                info += f"[bold white]Location:[/bold white] {s['label']}\n\n"
+                info += f"[bold white]Last Dialogue:[/bold white]\n[italic]\"{s['last_text']}\"[/italic]"
+            else: info = "[dim italic]Back to game hub.[/dim italic]"
+            layout["left"].update(Panel(Align.left(info, vertical="middle"), title="Save Preview", border_style="cyan", padding=(1, 3)))
+            
+            menu_text = ""
+            opts = [s["id"] for s in saves] + ["Back"]
+            for i, opt in enumerate(opts):
+                if i == state["main_idx"]: menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
+                else: menu_text += f"  {opt}\n"
+            layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Saves", border_style="yellow"))
+            return layout
+
+        state["saves"] = fetch_saves()
+        while True:
+            live.update(render_saves(state)); live.refresh()
+            keys = input_obj.read_keys()
+            if not keys:
+                time.sleep(0.05); continue
+            
+            exit_flow = False
+            for key in keys:
+                opts = [s["id"] for s in state["saves"]] + ["Back"]
+                if key.key == Keys.Up: state["main_idx"] = (state["main_idx"] - 1) % len(opts)
+                elif key.key == Keys.Down: state["main_idx"] = (state["main_idx"] + 1) % len(opts)
+                elif key.key == Keys.Enter or key.key == Keys.ControlM:
+                    choice = opts[state["main_idx"]]
+                    if choice == "Back": exit_flow = True; break
+                    
+                    live.stop(); console.clear()
+                    action = questionary.select(f"Save: {choice}", choices=["Load Save", "Delete Save", "Back"]).ask()
+                    if action == "Load Save":
+                        from src.terminal_client.screens.engine import GameEngine
+                        engine = GameEngine(game_id, choice, self.console, self.base_url)
+                        engine.run()
+                        exit_flow = True; break
+                    elif action == "Delete Save":
+                        if questionary.confirm(f"Delete '{choice}'?").ask():
+                            requests.delete(f"{self.base_url}/games/{game_id}/saves/{choice}")
+                            state["saves"] = fetch_saves()
+                            state["main_idx"] = 0
+                    live.start()
+                elif key.key == Keys.Escape: exit_flow = True; break
+            
+            if exit_flow: break
+
+    def validate_script_flow_shared(self, game_id):
+        """Standard validate flow but uses existing console/UI."""
+        res = requests.get(f"{self.base_url}/games/{game_id}/validate")
+        data = res.json()
+        layout = make_intro_layout()
+        if data["valid"]:
+            info = "[bold green]✓ Script is valid![/bold green]"
+            border = "green"
+        else:
+            info = f"[bold red]✗ Script has {len(data['errors'])} errors.[/bold red]"
+            border = "red"
+        layout["left"].update(Panel(Align.left(info, vertical="middle"), title="Validation", border_style=border))
+        layout["right"].update(Panel(Align.center("[bold yellow]Press any key[/bold yellow]", vertical="middle"), title="Action"))
+        console.clear(); console.print(layout)
+        questionary.press_any_key_to_continue().ask()
 
     def edit_metadata_flow(self, game_id, meta):
         """Dedicated UI for browsing and editing game metadata with live feedback and inline inputs."""

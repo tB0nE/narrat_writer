@@ -3,6 +3,7 @@ import sys
 import time
 import shutil
 import re
+import os
 import questionary
 from rich.panel import Panel
 from rich.align import Align
@@ -80,15 +81,38 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
         return layout
 
     def run(self):
-        """Primary Launcher loop handling top-level navigation."""
-        from src.terminal_client.utils import get_menu_choice
+        """Primary Launcher loop handling top-level navigation with persistent Live context."""
         options = ["Create Game", "Select Game", "Options", "Exit"]
-        while True:
-            choice = get_menu_choice(options, self.display_intro)
-            if choice == "Exit" or choice is None: sys.exit()
-            elif choice == "Create Game": self.create_game_flow()
-            elif choice == "Select Game": self.select_game_flow()
-            elif choice == "Options": self.global_options_flow()
+        input_obj = create_input()
+        idx = 0
+        
+        with Live(self.display_intro(options, idx), screen=True, auto_refresh=False) as live:
+            with input_obj.raw_mode():
+                while True:
+                    live.update(self.display_intro(options, idx)); live.refresh()
+                    keys = input_obj.read_keys()
+                    if not keys:
+                        if os.getenv("NARRAT_TEST_MODE") != "1":
+                            time.sleep(0.05)
+                        continue
+                    
+                    choice = None
+                    for key in keys:
+                        if key.key == Keys.Up: idx = (idx - 1) % len(options)
+                        elif key.key == Keys.Down: idx = (idx + 1) % len(options)
+                        elif key.key == Keys.Enter or key.key == Keys.ControlM:
+                            choice = options[idx]
+                        elif key.key == Keys.Escape: return
+                        elif key.key == Keys.ControlC: sys.exit()
+                    
+                    if choice:
+                        if choice == "Exit": sys.exit()
+                        elif choice == "Create Game":
+                            live.stop(); self.create_game_flow(); live.start()
+                        elif choice == "Select Game":
+                            self.select_game_flow_shared(live, input_obj)
+                        elif choice == "Options":
+                            self.global_options_flow_shared(live, input_obj)
 
     def create_game_flow(self):
         """Interactive game scaffolding flow (AI or Manual)."""
@@ -183,13 +207,18 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                 questionary.press_any_key_to_continue().ask()
 
     def select_game_flow(self):
-        """Interactive game selection flow with live preview."""
-        from src.terminal_client.utils import get_menu_choice
+        # Compatibility wrapper
+        with Live(None, screen=True, auto_refresh=False) as live:
+            self.select_game_flow_shared(live, create_input())
+
+    def select_game_flow_shared(self, live, input_obj):
+        """Interactive game selection flow with live preview using shared Live context."""
         res = requests.get(f"{self.base_url}/games")
         games = res.json()["games"]
         if not games:
+            live.stop()
             questionary.text("No games found. [Enter] to continue").ask()
-            return
+            live.start(); return
         
         def render_select(options, idx, games=games):
             layout = make_intro_layout()
@@ -201,12 +230,8 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                 chars = g.get('characters', [])
                 info += f"[bold white]Characters:[/bold white] {', '.join(chars) if chars else 'None'}\n\n"
                 plot = g.get('plot_outline', '')
-                if plot:
-                    info += f"[bold white]Plot Outline:[/bold white]\n{plot[:300]}{'...' if len(plot) > 300 else ''}"
-            else: 
-                info = "[dim italic]Back to main menu.[/dim italic]"
-            
-            # Left aligned with padding, vertically middle
+                if plot: info += f"[bold white]Plot Outline:[/bold white]\n{plot[:300]}{'...' if len(plot) > 300 else ''}"
+            else: info = "[dim italic]Back to main menu.[/dim italic]"
             layout["left"].update(Panel(Align.left(info, vertical="middle"), border_style="cyan", padding=(1, 3)))
             
             menu_text = ""
@@ -216,30 +241,44 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
             layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Select Game", border_style="yellow"))
             return layout
 
-        # Display Titles in menu, but map back to IDs for selection
         menu_options = [g["title"] for g in games] + ["Back"]
         title_to_id = {g["title"]: g["id"] for g in games}
+        idx = 0
         
-        choice_title = get_menu_choice(menu_options, render_select)
-        if choice_title and choice_title != "Back":
-            game_id = title_to_id[choice_title]
-            from src.terminal_client.screens.hub import GameHub
-            hub = GameHub(self.console, self.base_url)
-            hub.run(game_id)
+        while True:
+            live.update(render_select(menu_options, idx)); live.refresh()
+            keys = input_obj.read_keys()
+            if not keys:
+                time.sleep(0.05); continue
+            
+            choice = None
+            for key in keys:
+                if key.key == Keys.Up: idx = (idx - 1) % len(menu_options)
+                elif key.key == Keys.Down: idx = (idx + 1) % len(menu_options)
+                elif key.key == Keys.Enter or key.key == Keys.ControlM: choice = menu_options[idx]
+                elif key.key == Keys.Escape: return
+            
+            if choice:
+                if choice == "Back": return
+                game_id = title_to_id[choice]
+                live.stop()
+                from src.terminal_client.screens.hub import GameHub
+                hub = GameHub(self.console, self.base_url)
+                hub.run(game_id)
+                live.start(); return
 
     def global_options_flow(self):
-        """Settings menu for application-wide configuration using a single-loop interaction."""
+        # Compatibility wrapper
+        with Live(None, screen=True, auto_refresh=False) as live:
+            self.global_options_flow_shared(live, create_input())
+
+    def global_options_flow_shared(self, live, input_obj):
+        """Settings menu for application-wide configuration using shared Live context."""
         state = {"mode": "view", "field": None, "sub_options": [], "sub_idx": 0, "input_val": "", "main_idx": 0}
         main_options = ["Edit API Settings", "Select Model", "Change Mode", "Select Editor", "Edit Prompt Prefix", "Back"]
-        input_obj = create_input()
-
-        res = requests.get(f"{self.base_url}/config")
-        config = res.json()
 
         def render_options(config, state):
             layout = make_intro_layout()
-            
-            # Left Panel Content
             if state["mode"] == "view":
                 info = f"[bold cyan]Global Configuration[/bold cyan]\n\n"
                 info += f"[bold white]API URL:[/bold white] {config.get('api_url')}\n"
@@ -248,30 +287,25 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                 info += f"[bold white]Editor:[/bold white] {config.get('editor') or 'None'}\n"
                 info += f"[bold white]Prompt Prefix:[/bold white] {config.get('global_prompt_prefix', 'None')}\n"
                 layout["left"].update(Panel(Align.center(info, vertical="middle"), title="Settings Preview", border_style="cyan"))
-            
             elif state["mode"] == "select":
                 info = f"[bold yellow]Select {state['field']}[/bold yellow]\n\n"
                 for i, s_opt in enumerate(state["sub_options"]):
                     if i == state["sub_idx"]: info += f"> [bold yellow]{s_opt}[/bold yellow]\n"
                     else: info += f"  {s_opt}\n"
                 layout["left"].update(Panel(Align.center(info, vertical="middle"), title=f"Choose {state['field']}", border_style="yellow"))
-            
             elif state["mode"] == "input":
                 info = f"[bold green]Editing {state['field']}[/bold green]\n\n"
                 info += f"[dim italic]Please see the input prompt below...[/dim italic]\n"
                 info += f"\nCurrent Value: [bold]{state['input_val']}[/bold]"
                 layout["left"].update(Panel(Align.center(info, vertical="middle"), title=f"Enter {state['field']}", border_style="green"))
-
             elif state["mode"] == "testing":
                 info = f"[bold blue]Testing API Connection...[/bold blue]\n\n"
                 info += f"[dim]Contacting {config.get('api_url')}...[/dim]\n"
                 layout["left"].update(Panel(Align.center(info, vertical="middle"), title="API Test", border_style="blue"))
-
             elif state["mode"] == "loading":
                 info = f"[bold yellow]Loading {state['field']}...[/bold yellow]\n\n"
                 layout["left"].update(Panel(Align.center(info, vertical="middle"), title="Please Wait", border_style="yellow"))
 
-            # Right Panel (Menu)
             menu_text = ""
             for i, opt in enumerate(main_options):
                 if i == state["main_idx"]: menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
@@ -279,86 +313,64 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
             layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Global Options", border_style="yellow"))
             return layout
 
-        with Live(render_options(config, state), screen=True, auto_refresh=False) as live:
-            with input_obj.raw_mode():
-                while True:
-                    live.update(render_options(config, state)); live.refresh()
-                    keys = input_obj.read_keys()
-                    if not keys:
-                        time.sleep(0.05); continue
-                    for key in keys:
-                        if key.key == Keys.Up:
-                            if state["mode"] == "view": state["main_idx"] = (state["main_idx"] - 1) % len(main_options)
-                            elif state["mode"] == "select": state["sub_idx"] = (state["sub_idx"] - 1) % len(state["sub_options"])
-                        elif key.key == Keys.Down:
-                            if state["mode"] == "view": state["main_idx"] = (state["main_idx"] + 1) % len(main_options)
-                            elif state["mode"] == "select": state["sub_idx"] = (state["sub_idx"] + 1) % len(state["sub_options"])
-                        elif key.key == Keys.Enter or key.key == Keys.ControlM:
-                            if state["mode"] == "view":
-                                choice = main_options[state["main_idx"]]
-                                if choice == "Back": return
-                                elif choice == "Edit API Settings":
-                                    live.stop(); self.edit_api_flow_inline(config, state, render_options); live.start()
-                                    res = requests.get(f"{self.base_url}/config"); config = res.json()
-                                elif choice == "Select Model":
-                                    state["mode"], state["field"] = "loading", "Models"
-                                    live.update(render_options(config, state)); live.refresh()
-                                    m_res = requests.get(f"{self.base_url}/config/models")
-                                    models = m_res.json().get("models", [])
-                                    if not models:
-                                        state["mode"] = "view"
-                                        live.stop()
-                                        console.print("[yellow]Could not fetch models. Enter manually?[/yellow]")
-                                        if questionary.confirm("Manual entry?").ask():
-                                            nm = questionary.text("Model ID").ask()
-                                            if nm: requests.post(f"{self.base_url}/config", json={"model": nm})
-                                        live.start()
-                                    else:
-                                        state["mode"], state["field"], state["sub_options"], state["sub_idx"] = "select", "Model", models + ["Back"], 0
-                                elif choice == "Change Mode":
-                                    state["mode"], state["field"], state["sub_options"], state["sub_idx"] = "select", "Mode", ["play", "writer", "developer", "Back"], 0
-                                elif choice == "Select Editor":
-                                    state["mode"], state["field"], state["sub_options"], state["sub_idx"] = "select", "Editor", ["vim", "nano", "code", "subl", "None", "Back"], 0
-                                elif choice == "Edit Prompt Prefix":
-                                    editor = config.get("editor", "")
-                                    current_prefix = config.get("global_prompt_prefix", "")
-                                    live.stop()
-                                    if editor and editor != "None":
-                                        from src.terminal_client.utils import edit_text_in_external_editor
-                                        new_prefix = edit_text_in_external_editor(current_prefix)
-                                    else:
-                                        new_prefix = questionary.text("Enter new global prompt prefix", default=current_prefix).ask()
-                                    if new_prefix is not None:
-                                        requests.post(f"{self.base_url}/config", json={"global_prompt_prefix": new_prefix})
-                                    live.start()
-                                    res = requests.get(f"{self.base_url}/config"); config = res.json()
-                            
-                            elif state["mode"] == "select":
-                                selection = state["sub_options"][state["sub_idx"]]
-                                field = state["field"]
-                                
-                                if selection == "Back":
-                                    state["mode"] = "view"
-                                else:
-                                    if field == "Editor" and selection != "None":
-                                        if not shutil.which(selection):
-                                            live.stop()
-                                            console.print(f"[red]Error: Editor '{selection}' not found on system path.[/red]")
-                                            time.sleep(2)
-                                            live.start()
-                                            continue # Keep state in select mode
-                                            
-                                    state["mode"] = "view"
-                                    payload = {}
-                                    if field == "Model": payload["model"] = selection
-                                    elif field == "Mode": payload["narrat_mode"] = selection
-                                    elif field == "Editor": payload["editor"] = "" if selection == "None" else selection
-                                    requests.post(f"{self.base_url}/config", json=payload)
-                                    res = requests.get(f"{self.base_url}/config"); config = res.json()
-
-                        elif key.key == Keys.Escape:
-                            if state["mode"] != "view": state["mode"] = "view"
-                            else: return
+        while True:
+            res = requests.get(f"{self.base_url}/config"); config = res.json()
+            live.update(render_options(config, state)); live.refresh()
+            keys = input_obj.read_keys()
+            if not keys:
+                time.sleep(0.05); continue
+            
+            for key in keys:
+                if key.key == Keys.Up:
+                    if state["mode"] == "view": state["main_idx"] = (state["main_idx"] - 1) % len(main_options)
+                    elif state["mode"] == "select": state["sub_idx"] = (state["sub_idx"] - 1) % len(state["sub_options"])
+                elif key.key == Keys.Down:
+                    if state["mode"] == "view": state["main_idx"] = (state["main_idx"] + 1) % len(main_options)
+                    elif state["mode"] == "select": state["sub_idx"] = (state["sub_idx"] + 1) % len(state["sub_options"])
+                elif key.key == Keys.Enter or key.key == Keys.ControlM:
+                    if state["mode"] == "view":
+                        choice = main_options[state["main_idx"]]
+                        if choice == "Back": return
+                        elif choice == "Edit API Settings":
+                            live.stop(); self.edit_api_flow_inline(config, state, render_options); live.start()
+                        elif choice == "Select Model":
+                            state["mode"], state["field"] = "loading", "Models"
+                            live.update(render_options(config, state)); live.refresh()
+                            m_res = requests.get(f"{self.base_url}/config/models")
+                            models = m_res.json().get("models", [])
+                            if not models:
+                                state["mode"] = "view"; live.stop()
+                                if questionary.confirm("Manual entry?").ask():
+                                    nm = questionary.text("Model ID").ask()
+                                    if nm: requests.post(f"{self.base_url}/config", json={"model": nm})
+                                live.start()
+                            else: state["mode"], state["field"], state["sub_options"], state["sub_idx"] = "select", "Model", models + ["Back"], 0
+                        elif choice == "Change Mode": state["mode"], state["field"], state["sub_options"], state["sub_idx"] = "select", "Mode", ["play", "writer", "developer", "Back"], 0
+                        elif choice == "Select Editor": state["mode"], state["field"], state["sub_options"], state["sub_idx"] = "select", "Editor", ["vim", "nano", "code", "subl", "None", "Back"], 0
+                        elif choice == "Edit Prompt Prefix":
+                            editor = config.get("editor", "")
+                            live.stop()
+                            if editor and editor != "None":
+                                nv = edit_text_in_external_editor(config.get("global_prompt_prefix", ""))
+                            else: nv = questionary.text("New Prefix", default=config.get("global_prompt_prefix", "")).ask()
+                            if nv is not None: requests.post(f"{self.base_url}/config", json={"global_prompt_prefix": nv})
+                            live.start()
+                    elif state["mode"] == "select":
+                        selection = state["sub_options"][state["sub_idx"]]
+                        field = state["field"]; state["mode"] = "view"
+                        if selection != "Back":
+                            payload = {}
+                            if field == "Model": payload["model"] = selection
+                            elif field == "Mode": payload["narrat_mode"] = selection
+                            elif field == "Editor":
+                                if selection != "None" and not shutil.which(selection):
+                                    live.stop(); console.print(f"[red]Error: {selection} not found.[/red]"); time.sleep(2); live.start()
+                                    state["mode"] = "select" # Stay
+                                else: payload["editor"] = "" if selection == "None" else selection
+                            if payload: requests.post(f"{self.base_url}/config", json=payload)
+                elif key.key == Keys.Escape:
+                    if state["mode"] != "view": state["mode"] = "view"
+                    else: return
 
     def edit_api_flow_inline(self, config, state, render_options):
         url, key = config.get("api_url", ""), config.get("api_key", "")

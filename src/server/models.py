@@ -29,6 +29,8 @@ class CreateGameRequest(BaseModel):
 
 class GenerateRequest(BaseModel):
     target: str
+    category: Optional[str] = "characters"
+    sub_type: Optional[str] = "description"
 
 class DialogueResponse(BaseModel):
     type: str # talk, choice, end, missing_label

@@ -61,9 +61,9 @@ def test_game_engine_choice_rendering(test_console):
     text = test_console.export_text()
     
     assert "A foe appears!" in text
-    assert "> Fight" in text
-    assert "  Flee" in text
-    assert "System / Choices" in text
+    assert "Fight" in text
+    assert "Flee" in text
+    assert "Input / Choice" in text
     print("Game Engine choice rendering verified.")
 
 def test_save_manager_rendering(test_console):

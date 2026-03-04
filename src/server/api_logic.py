@@ -13,15 +13,29 @@ logger = logging.getLogger("narrat_api")
 
 async def process_current_step(game_id: str, state: SessionState, parser: 'NarratParser', command: str = None):
     """
-    The main execution loop for the Narrat script parser.
-    Handles non-blocking commands automatically and returns on blocking ones (talk, choice).
+    Standard VN 'Run-until-blocked' loop.
+    Processes script lines until a talk or choice is reached.
     """
-    logger.info(f"--- STEP START: {state.current_label} @ {state.line_index} (Cmd: '{command}') ---")
+    logger.info(f"Step: {state.current_label} @ {state.line_index} (Cmd: '{command}')")
     
-    # reprocessing = (command == "B_REPROCESS" or command == "R")
-    
+    # 1. Handle Choice selection if command is numeric
+    if command and command.strip().isdigit():
+        # Choice selection always happens when we are already AT a choice block.
+        # However, we incremented the index by 1 when we returned the choice response.
+        # So the actual 'choice:' line is at state.line_index - 1
+        line_data = parser.get_line(state.current_label, state.line_index - 1)
+        if line_data and line_data[1].strip() == "choice:":
+            options = parse_choice_options(parser, state.current_label, state.line_index)
+            if command.strip() in options:
+                state.current_label, state.line_index = options[command.strip()]["target"], 0
+                logger.info(f"Choice selected: {command} -> {state.current_label}")
+                # After a choice jump, we fall through to the main execution loop
+            else:
+                logger.warning(f"Invalid choice index: {command}")
+
+    # 2. Main Execution Loop
     loop_safety = 0
-    while loop_safety < 1000:
+    while loop_safety < 500:
         loop_safety += 1
         line_data = parser.get_line(state.current_label, state.line_index)
         
@@ -34,39 +48,34 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
         stripped = line_text.strip()
 
         if not stripped or stripped.startswith("//"):
-            state.line_index += 1
-            continue
+            state.line_index += 1; continue
 
-        # --- NON-BLOCKING COMMANDS ---
+        # --- A. NON-BLOCKING COMMANDS (Update state and continue) ---
         
         if re.match(r'^background\s+([\w_]+)', stripped):
-            bg = re.match(r'^background\s+([\w_]+)', stripped).group(1)
-            state.variables["__current_bg"] = bg
+            state.variables["__current_bg"] = re.match(r'^background\s+([\w_]+)', stripped).group(1)
             state.line_index += 1; continue
 
         if re.match(r'^scene\s+([\w_]+)', stripped):
-            sc = re.match(r'^scene\s+([\w_]+)', stripped).group(1)
-            state.variables["__current_scene"] = sc
+            state.variables["__current_scene"] = re.match(r'^scene\s+([\w_]+)', stripped).group(1)
             state.line_index += 1; continue
 
         if re.match(r'^set_expression\s+([\w_]+)\s+([\w_]+)', stripped):
             m = re.match(r'^set_expression\s+([\w_]+)\s+([\w_]+)', stripped)
             char, emo = m.group(1), m.group(2)
             state.variables[f"__emo_{char}"] = emo
-            if "__updated_vars" not in state.variables: state.variables["__updated_vars"] = []
-            vn = f"{char}_emotion"
-            if vn not in state.variables["__updated_vars"]: state.variables["__updated_vars"].append(vn)
-            state.variables[vn] = emo
             state.line_index += 1; continue
 
         if re.match(r'^set\s+([\w_.]+)\s+(.*)$', stripped):
             m = re.match(r'^set\s+([\w_.]+)\s+(.*)$', stripped)
             var_path, val_str = m.group(1), m.group(2).strip()
+            # Basic parsing
             if val_str.isdigit(): val = int(val_str)
             elif val_str.lower() == "true": val = True
             elif val_str.lower() == "false": val = False
             else: val = val_str.strip('"').strip("'")
             
+            # Nested update
             clean_path = var_path[5:] if var_path.startswith("data.") else var_path
             path_parts = clean_path.split(".")
             curr = state.variables
@@ -75,6 +84,7 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
                 curr = curr[p]
             curr[path_parts[-1]] = val
             
+            # Tracking
             if "__updated_vars" not in state.variables: state.variables["__updated_vars"] = []
             if var_path not in state.variables["__updated_vars"]: state.variables["__updated_vars"].append(var_path)
             if len(state.variables["__updated_vars"]) > 10: state.variables["__updated_vars"].pop(0)
@@ -90,6 +100,7 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
             if evaluate_expression(expr, state.variables):
                 state.line_index += 1
             else:
+                # Skip block
                 base_indent = len(line_text) - len(line_text.lstrip())
                 state.line_index += 1
                 while True:
@@ -100,92 +111,97 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
                     state.line_index += 1
             continue
 
-        # --- BLOCKING COMMANDS ---
+        # --- B. BLOCKING COMMANDS (Update state and return) ---
 
-        # 1. Choice
         if stripped == "choice:":
-            # Parse options
-            options, opt_idx, temp_idx = {}, 1, state.line_index + 1
-            while True:
-                nxt = parser.get_line(state.current_label, temp_idx)
-                if not nxt: break
-                if not nxt[1].strip() or nxt[1].strip().startswith("//"): 
-                    temp_idx += 1; continue
-                opt_m = re.match(r'^\s*"(.*)":\s*(?://.*)?$', nxt[1])
-                if opt_m:
-                    label_text, s_idx, target_lbl = opt_m.group(1), temp_idx + 1, None
-                    while True:
-                        j_data = parser.get_line(state.current_label, s_idx)
-                        if not j_data: break
-                        if not j_data[1].strip() or j_data[1].strip().startswith("//"): s_idx += 1; continue
-                        if re.match(r'^\s*"(.*)":\s*(?://.*)?$', j_data[1]): break
-                        m = re.search(r'(?:jump|->)\s+([\w_]+)', j_data[1])
-                        if m: target_lbl = m.group(1); break
-                        s_idx += 1
-                    if target_lbl:
-                        options[str(opt_idx)] = {"text": label_text, "target": target_lbl}
-                        opt_idx += 1; temp_idx = s_idx + 1; continue
-                break
-            
-            # Handle selection
-            if command and command.strip().isdigit():
-                cmd_str = command.strip()
-                if cmd_str in options:
-                    state.current_label, state.line_index = options[cmd_str]["target"], 0
-                    save_session(game_id, state)
-                    return await process_current_step(game_id, state, parser, "B_REPROCESS")
+            options = parse_choice_options(parser, state.current_label, state.line_index + 1)
+            # Increment index so we sit ON the choice block for selection
+            res_idx = state.line_index
+            state.line_index += 1
+            save_and_log_state(game_id, state)
+            return build_response(game_id, state, "choice", options=options, line_index=res_idx)
 
-            # Otherwise, return choice response and STAY on this line index
-            bg = state.variables.get("__current_bg", "None")
-            last_char = state.dialogue_log[-1]["character"] if state.dialogue_log else "narrator"
-            
-            char_meta = {
-                "profile": get_reference(game_id, "characters", last_char, "profile"),
-                "description": get_reference(game_id, "characters", last_char, "description"),
-                "placeholder": get_reference(game_id, "characters", last_char, "idle"),
-                "emotion": state.variables.get(f"__emo_{last_char}", "Neutral")
-            }
-            
-            return DialogueResponse(
-                type="choice", options=options, text="Select an option:", 
-                character=last_char, background=bg, meta=char_meta,
-                current_label=state.current_label, line_index=state.line_index,
-                background_desc=get_reference(game_id, "backgrounds", bg) if bg != "None" else "",
-                variables=state.variables, dialogue_log=state.dialogue_log
-            )
-
-        # 2. Dialogue / Talk
-        char, text = None, None
-        t_m = re.match(r'^(?:talk\s+)?([\w_]+)(?:\s+[\w_]+)?\s+"(.*)"$', stripped)
-        if t_m and t_m.group(1) not in ["background", "scene", "jump", "set", "set_expression", "choice", "if", "var"]:
-            char, text = t_m.group(1), t_m.group(2)
-        elif re.match(r'^"(.*)"$', stripped):
-            char, text = "narrator", re.match(r'^"(.*)"$', stripped).group(1)
-
-        if char and text is not None:
-            current_idx = state.line_index
+        # Dialogue match
+        char, text = match_dialogue(stripped)
+        if char:
+            res_idx = state.line_index
+            # We ALWAYS increment the index for the next step, 
+            # regardless of whether we are reprocessing or not.
             state.line_index += 1
             
             state.dialogue_log.append({"character": char, "text": text})
             if len(state.dialogue_log) > 20: state.dialogue_log.pop(0)
-            state.history.append(json.loads(state.model_dump_json()))
-            save_session(game_id, state)
-            
-            bg = state.variables.get("__current_bg", "None")
-            meta = {
-                "profile": get_reference(game_id, "characters", char, "profile"),
-                "description": get_reference(game_id, "characters", char, "description"),
-                "placeholder": get_reference(game_id, "characters", char, "idle"),
-                "emotion": state.variables.get(f"__emo_{char}", "Neutral")
-            }
-            return DialogueResponse(
-                type="talk", character=char, text=text, meta=meta,
-                current_label=state.current_label, line_index=current_idx,
-                background=bg, background_desc=get_reference(game_id, "backgrounds", bg) if bg != "None" else "",
-                variables=state.variables, dialogue_log=state.dialogue_log
-            )
+            save_and_log_state(game_id, state)
+            return build_response(game_id, state, "talk", character=char, text=text, line_index=res_idx)
 
-        # 3. Fallback
+        # Unrecognized - skip
+        logger.warning(f"Unknown line: {stripped}")
         state.line_index += 1
-        
-    return DialogueResponse(type="end", text="Execution safety limit reached.")
+
+    return DialogueResponse(type="end", text="Safety limit.")
+
+# --- HELPERS ---
+
+def parse_choice_options(parser, label, start_idx):
+    options, opt_idx, temp_idx = {}, 1, start_idx
+    while True:
+        nxt = parser.get_line(label, temp_idx)
+        if not nxt: break
+        txt = nxt[1].strip()
+        if not txt or txt.startswith("//"): temp_idx += 1; continue
+        opt_m = re.match(r'^\s*"(.*)":\s*(?://.*)?$', nxt[1])
+        if opt_m:
+            label_text = opt_m.group(1)
+            s_idx, target_lbl = temp_idx + 1, None
+            while True:
+                j_data = parser.get_line(label, s_idx)
+                if not j_data: break
+                jc = j_data[1].strip()
+                if not jc or jc.startswith("//"): s_idx += 1; continue
+                if re.match(r'^\s*"(.*)":', j_data[1]): break # Next option
+                m = re.search(r'(?:jump|->)\s+([\w_]+)', jc)
+                if m: target_lbl = m.group(1); break
+                s_idx += 1
+            if target_lbl:
+                options[str(opt_idx)] = {"text": label_text, "target": target_lbl}
+                opt_idx += 1; temp_idx = s_idx + 1; continue
+        break
+    return options
+
+def match_dialogue(stripped):
+    # talk char "text"
+    m = re.match(r'^(?:talk\s+)?([\w_]+)(?:\s+[\w_]+)?\s+"(.*)"$', stripped)
+    if m and m.group(1) not in ["background", "scene", "jump", "set", "set_expression", "choice", "if", "var"]:
+        return m.group(1), m.group(2)
+    # "text" (implicit narrate)
+    m = re.match(r'^"(.*)"$', stripped)
+    if m: return "narrator", m.group(1)
+    return None, None
+
+def save_and_log_state(game_id, state):
+    state.history.append(json.loads(state.model_dump_json()))
+    if len(state.history) > 50: state.history.pop(0)
+    save_session(game_id, state)
+
+def build_response(game_id, state, rtype, **kwargs):
+    bg = state.variables.get("__current_bg", "None")
+    char = kwargs.get("character") or (state.dialogue_log[-1]["character"] if state.dialogue_log else "narrator")
+    char_meta = {
+        "profile": get_reference(game_id, "characters", char, "profile"),
+        "description": get_reference(game_id, "characters", char, "description"),
+        "placeholder": get_reference(game_id, "characters", char, "idle"),
+        "emotion": state.variables.get(f"__emo_{char}", "Neutral")
+    }
+    return DialogueResponse(
+        type=rtype,
+        character=char,
+        background=bg,
+        background_desc=get_reference(game_id, "backgrounds", bg) if bg != "None" else "",
+        meta={**char_meta, **kwargs.get("meta", {})},
+        current_label=state.current_label,
+        line_index=kwargs.get("line_index", state.line_index),
+        variables=state.variables,
+        dialogue_log=state.dialogue_log,
+        options=kwargs.get("options"),
+        text=kwargs.get("text")
+    )
