@@ -73,3 +73,28 @@ club_bar:
             jump main
         "Leave":
             jump main
+
+
+scan_crowd:
+    "I trigger my retinal scan, blinking past the initial static."
+    "The crowd dissolves into wireframes and ghost IDs. Most are gray—no connection, no threat."
+    "But there, near the flickering hologram of a geisha, a red pulse."
+    "The data broker. He's checking his watch, looking paranoid as expected."
+    talk anya "Gotcha. Signal is weak, but it's him."
+    choice:
+        "Confront him now":
+            jump confront_broker
+        "Run a silent intrusion on his neural link":
+            jump silent_intrusion
+
+
+confront_broker:
+    narrator "I weave through the holographic crowd, disrupting the geisha's projection as I pass. The broker flinches as I step into his personal space."
+    talk anya "You look like you've seen a ghost. Or maybe just a corporate audit."
+    talk broker "Anya? They said you were dead. Or in jail."
+    talk anya "Neither. Just annoyed. The drive. Hand it over."
+    choice:
+        "Force his hand":
+            jump intimidate_broker
+        "Offer credits":
+            jump buy_data

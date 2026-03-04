@@ -235,7 +235,8 @@ class GameEngine:
                             live.stop()
                             with console.status("AI is generating missing content..."):
                                 requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/generate", json={"target": self.data["meta"]["target"]})
-                            res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
+                            # Use B_REPROCESS to reload the script and stay on the current label (which now exists)
+                            res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "B_REPROCESS"})
                             self.data = res.json(); live.start()
                         else:
                             res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": str(cmd)})

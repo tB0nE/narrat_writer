@@ -175,12 +175,66 @@ async def create_game(req: CreateGameRequest):
     with open(os.path.join(game_dir, "phase1.narrat"), "w") as f: f.write(initial_script)
     return {"status": "success", "game_id": req.name}
 
+@app.post("/games/{game_id}/sessions/{session_id}/generate")
+async def generate_more_story(game_id: str, session_id: str, req: Dict[str, Any]):
+    target = req.get("target")
+    state = load_session(game_id, session_id)
+    meta = load_metadata(game_id)
+    
+    context = ""
+    for entry in state.dialogue_log[-10:]:
+        context += f"{entry['character']}: {entry['text']}\n"
+    
+    prompt = prompts.GENERATE_STORY_PROMPT.format(
+        target_label=target,
+        context=context,
+        metadata=meta.model_dump_json(indent=2) if meta else "No metadata"
+    )
+    
+    try:
+        new_script = call_llm(prompt, game_id=game_id)
+        new_script = re.sub(r'^```[\w]*\s*\n?', '', new_script, flags=re.MULTILINE)
+        new_script = re.sub(r'\n?```$', '', new_script, flags=re.MULTILINE)
+        p = get_game_path(game_id, "phase1.narrat")
+        with open(p, "a") as f: f.write("\n\n" + new_script + "\n")
+        return {"status": "success"}
+    except Exception as e: raise HTTPException(status_code=502, detail=str(e))
+
+@app.post("/games/{game_id}/sessions/{session_id}/continue")
+async def continue_story(game_id: str, session_id: str):
+    state = load_session(game_id, session_id)
+    meta = load_metadata(game_id)
+    
+    next_label = f"cont_{state.current_label}_{int(time.time())}"
+    context = ""
+    for entry in state.dialogue_log[-10:]:
+        context += f"{entry['character']}: {entry['text']}\n"
+    
+    prompt = prompts.CONTINUE_STORY_PROMPT.format(
+        current_label=state.current_label,
+        next_label=next_label,
+        context=context,
+        metadata=meta.model_dump_json(indent=2) if meta else "No metadata"
+    )
+    
+    try:
+        new_script = call_llm(prompt, game_id=game_id)
+        new_script = re.sub(r'^```[\w]*\s*\n?', '', new_script, flags=re.MULTILINE)
+        new_script = re.sub(r'\n?```$', '', new_script, flags=re.MULTILINE)
+        p = get_game_path(game_id, "phase1.narrat")
+        with open(p, "a") as f: f.write("\n\n" + new_script + "\n")
+        
+        # Point the state to the new label
+        state.current_label = next_label
+        state.line_index = 0
+        save_session(game_id, state)
+        return {"status": "success", "next_label": next_label}
+    except Exception as e: raise HTTPException(status_code=502, detail=str(e))
+
 @app.post("/games/{game_id}/sessions/{session_id}/step")
 async def step_game(game_id: str, session_id: str, update: GameUpdate):
     state = load_session(game_id, session_id)
     parser = NarratParser(game_id)
-    if state.current_label not in parser.labels:
-        return DialogueResponse(type="missing_label", meta={"target": state.current_label}, text=f"Label '{state.current_label}' is missing.", variables=state.variables, dialogue_log=state.dialogue_log)
     if update.command == "R":
         meta = load_metadata(game_id)
         state.current_label, state.line_index = (meta.starting_point if meta else "main"), 0
