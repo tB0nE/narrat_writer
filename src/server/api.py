@@ -236,8 +236,7 @@ async def step_game(game_id: str, session_id: str, update: GameUpdate):
     state = load_session(game_id, session_id)
     parser = NarratParser(game_id)
     if update.command == "R":
-        meta = load_metadata(game_id)
-        state.current_label, state.line_index = (meta.starting_point if meta else "main"), 0
+        state.line_index = 0
         return await process_current_step(game_id, state, parser, "B_REPROCESS")
     if update.command == "B":
         if len(state.history) > 1:

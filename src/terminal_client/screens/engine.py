@@ -246,6 +246,7 @@ class GameEngine:
                         else:
                             res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": str(cmd)})
                             self.data = res.json()
+                            if cmd == "R": self.action_idx = 0
                             if self.data.get("type") in ["choice", "missing_label"]: 
                                 self.focus, self.choice_idx = "choices", 0
                             

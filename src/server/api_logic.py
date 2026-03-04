@@ -21,10 +21,11 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
     # 1. Handle Choice selection if command is numeric
     if command and command.strip().isdigit():
         # Choice selection always happens when we are already AT a choice block.
-        # We need to re-parse the current choice to find the target.
-        line_data = parser.get_line(state.current_label, state.line_index)
+        # However, we incremented the index by 1 when we returned the choice response.
+        # So the actual 'choice:' line is at state.line_index - 1
+        line_data = parser.get_line(state.current_label, state.line_index - 1)
         if line_data and line_data[1].strip() == "choice:":
-            options = parse_choice_options(parser, state.current_label, state.line_index + 1)
+            options = parse_choice_options(parser, state.current_label, state.line_index)
             if command.strip() in options:
                 state.current_label, state.line_index = options[command.strip()]["target"], 0
                 logger.info(f"Choice selected: {command} -> {state.current_label}")
@@ -114,14 +115,20 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
 
         if stripped == "choice:":
             options = parse_choice_options(parser, state.current_label, state.line_index + 1)
+            # Increment index so we sit ON the choice block for selection
+            res_idx = state.line_index
+            state.line_index += 1
             save_and_log_state(game_id, state)
-            return build_response(game_id, state, "choice", options=options)
+            return build_response(game_id, state, "choice", options=options, line_index=res_idx)
 
         # Dialogue match
         char, text = match_dialogue(stripped)
         if char:
             res_idx = state.line_index
+            # We ALWAYS increment the index for the next step, 
+            # regardless of whether we are reprocessing or not.
             state.line_index += 1
+            
             state.dialogue_log.append({"character": char, "text": text})
             if len(state.dialogue_log) > 20: state.dialogue_log.pop(0)
             save_and_log_state(game_id, state)
