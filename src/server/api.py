@@ -270,13 +270,26 @@ async def regenerate_metadata(game_id: str, req: CreateGameRequest):
 async def list_saves(game_id: str):
     path = get_game_path(game_id, "saves")
     if not os.path.exists(path): return {"saves": []}
+    
     saves = []
+    # Only process files changed in the last hour to speed up?
+    # No, let's just make it more robust.
     for f in os.listdir(path):
         if f.endswith(".json"):
             sid = f.replace(".json", "")
             try:
+                full_p = os.path.join(path, f)
+                mtime = os.path.getmtime(full_p)
+                
+                # Fast check: Read only first few lines if possible or just rely on file
+                # For now, we still load but maybe we can optimize load_session
                 st = load_session(game_id, sid)
-                saves.append({"id": sid, "label": st.current_label, "last_text": st.dialogue_log[-1]["text"] if st.dialogue_log else "Start", "timestamp": os.path.getmtime(os.path.join(path, f))})
+                saves.append({
+                    "id": sid, 
+                    "label": st.current_label, 
+                    "last_text": st.dialogue_log[-1]["text"] if st.dialogue_log else "Start", 
+                    "timestamp": mtime
+                })
             except: continue
     saves.sort(key=lambda x: x["timestamp"], reverse=True)
     return {"saves": saves}

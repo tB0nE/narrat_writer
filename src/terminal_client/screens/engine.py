@@ -165,68 +165,81 @@ class GameEngine:
                 res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
                 self.data = res.json()
             return
+        
         input_obj = create_input()
-        while True:
-            with Live(self.display_game(), auto_refresh=False, screen=True) as live:
-                with input_obj.raw_mode():
+        with Live(self.display_game(), auto_refresh=False, screen=True) as live:
+            with input_obj.raw_mode():
+                while True:
+                    live.update(self.display_game()); live.refresh()
+                    keys = input_obj.read_keys()
+                    if not keys:
+                        time.sleep(0.05); continue
+                    
                     cmd = None
-                    while cmd is None:
-                        live.update(self.display_game()); live.refresh()
-                        keys = input_obj.read_keys()
-                        if not keys:
-                            time.sleep(0.05); continue
-                        for key in keys:
-                            if key.key == Keys.Tab:
-                                if self.data.get("type") == "choice": self.focus = "actions" if self.focus == "choices" else "choices"
-                                else: self.focus = "actions"
-                            elif key.key == Keys.Left:
-                                if self.focus == "actions": self.action_idx = (self.action_idx - 1) % len(self.actions)
-                            elif key.key == Keys.Right:
-                                if self.focus == "actions": self.action_idx = (self.action_idx + 1) % len(self.actions)
-                            elif key.key == Keys.Up:
-                                if self.focus == "choices":
-                                    count = len(self.data.get("options", {}))
-                                    if count: self.choice_idx = (self.choice_idx - 1) % count
-                            elif key.key == Keys.Down:
-                                if self.focus == "choices":
-                                    count = len(self.data.get("options", {}))
-                                    if count: self.choice_idx = (self.choice_idx + 1) % count
-                            elif key.key == Keys.Enter or key.key == Keys.ControlM:
-                                if self.focus == "choices":
-                                    opt_keys = list(self.data["options"].keys())
-                                    cmd = opt_keys[self.choice_idx]
-                                    self.focus, self.choice_idx = "actions", 0
-                                else:
-                                    action = self.actions[self.action_idx]
-                                    if action == "Next": cmd = " "
-                                    elif action == "View Script": self.show_script = not self.show_script; continue
-                                    elif action == "Reload": cmd = "R"
-                                    elif action == "Back": cmd = "B"
-                                    elif action == "Edit": cmd = "DO_EDIT"
-                                    elif action == "Exit": return
-                            elif key.key == Keys.ControlC: return
-            if cmd == "DO_EDIT":
-                self.handle_edit(); cmd = "REFRESH"
-            res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": str(cmd)})
-            self.data = res.json()
-            if self.data.get("type") == "choice": self.focus, self.choice_idx = "choices", 0
-            if self.data.get("type") == "end":
-                c = questionary.select("End of Script.", choices=["Generate More", "Restart", "Exit"]).ask()
-                if c == "Generate More":
-                    requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/continue")
-                    res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
-                    self.data = res.json()
-                elif c == "Restart":
-                    res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
-                    self.data = res.json()
-                else: return
-            if self.data.get("type") == "missing_label":
-                c = questionary.select(f"Label '{self.data['meta']['target']}' is missing!", choices=["Generate with AI", "Back (Undo)"]).ask()
-                if c == "Generate with AI":
-                    requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/generate", json={"target": self.data["meta"]["target"]})
-                    res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
-                else: res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "B"})
-                self.data = res.json()
+                    for key in keys:
+                        if key.key == Keys.Tab:
+                            if self.data.get("type") == "choice": self.focus = "actions" if self.focus == "choices" else "choices"
+                            else: self.focus = "actions"
+                        elif key.key == Keys.Left:
+                            if self.focus == "actions": self.action_idx = (self.action_idx - 1) % len(self.actions)
+                        elif key.key == Keys.Right:
+                            if self.focus == "actions": self.action_idx = (self.action_idx + 1) % len(self.actions)
+                        elif key.key == Keys.Up:
+                            if self.focus == "choices":
+                                count = len(self.data.get("options", {}))
+                                if count: self.choice_idx = (self.choice_idx - 1) % count
+                        elif key.key == Keys.Down:
+                            if self.focus == "choices":
+                                count = len(self.data.get("options", {}))
+                                if count: self.choice_idx = (self.choice_idx + 1) % count
+                        elif key.key == Keys.Enter or key.key == Keys.ControlM:
+                            if self.focus == "choices":
+                                opt_keys = list(self.data["options"].keys())
+                                cmd = opt_keys[self.choice_idx]
+                                self.focus, self.choice_idx = "actions", 0
+                            else:
+                                action = self.actions[self.action_idx]
+                                if action == "Next": cmd = " "
+                                elif action == "View Script": self.show_script = not self.show_script
+                                elif action == "Reload": cmd = "R"
+                                elif action == "Back": cmd = "B"
+                                elif action == "Edit": cmd = "DO_EDIT"
+                                elif action == "Exit": return
+                        elif key.key == Keys.ControlC: return
+                    
+                    if cmd:
+                        if cmd == "DO_EDIT":
+                            live.stop()
+                            self.handle_edit()
+                            live.start()
+                            # After edit, refresh the screen
+                            res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "B_REPROCESS"})
+                            self.data = res.json()
+                        else:
+                            res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": str(cmd)})
+                            self.data = res.json()
+                            if self.data.get("type") == "choice": self.focus, self.choice_idx = "choices", 0
+                            
+                            if self.data.get("type") == "end":
+                                live.stop()
+                                c = questionary.select("End of Script.", choices=["Generate More", "Restart", "Exit"]).ask()
+                                if c == "Generate More":
+                                    requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/continue")
+                                    res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
+                                    self.data = res.json(); live.start()
+                                elif c == "Restart":
+                                    res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
+                                    self.data = res.json(); live.start()
+                                else: return
+                            
+                            if self.data.get("type") == "missing_label":
+                                live.stop()
+                                c = questionary.select(f"Label '{self.data['meta']['target']}' is missing!", choices=["Generate with AI", "Back (Undo)"]).ask()
+                                if c == "Generate with AI":
+                                    requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/generate", json={"target": self.data["meta"]["target"]})
+                                    res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
+                                else: res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "B"})
+                                self.data = res.json(); live.start()
 
     def handle_edit(self):
         p = f"games/{self.game_id}/phase1.narrat"
