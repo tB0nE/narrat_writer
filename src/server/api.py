@@ -241,8 +241,12 @@ async def step_game(game_id: str, session_id: str, update: GameUpdate):
         return await process_current_step(game_id, state, parser, "B_REPROCESS")
     if update.command == "B":
         if len(state.history) > 1:
-            state.history.pop(); prev = state.history.pop()
-            state = SessionState(**prev); save_session(game_id, state)
+            # Current state is always at the top, we want to discard it and 
+            # go back to the state that was saved BEFORE the previous blocking line.
+            state.history.pop() # Remove current
+            prev_state_dict = state.history.pop()
+            state = SessionState(**prev_state_dict)
+            save_session(game_id, state)
             return await process_current_step(game_id, state, parser, "B_REPROCESS")
     return await process_current_step(game_id, state, parser, update.command)
 

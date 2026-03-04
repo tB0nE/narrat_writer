@@ -22,15 +22,20 @@ class GameEngine:
         self.focus = "actions"
         self.action_idx = 0
         self.choice_idx = 0
-        self.actions = ["Next", "View Script", "Reload", "Back", "Edit", "Exit"]
+        # New order: Next, Back, Reload Section, Edit Assets, View Script, Exit Game
+        self.actions = ["Next", "Back", "Reload Section", "Edit Assets", "View Script", "Exit Game"]
         self.console = custom_console or console
         self.base_url = base_url or BASE_URL
 
     def get_actions_row(self):
         parts = []
         for i, act in enumerate(self.actions):
+            display_name = act
+            if act == "View Script" and self.show_script:
+                display_name = "Hide Script"
+            
             style = "bold yellow reverse" if (self.focus == "actions" and i == self.action_idx) else "dim"
-            parts.append(f"[{style}]{act}[/{style}]")
+            parts.append(f"[{style}]{display_name}[/{style}]")
         return "  ".join(parts)
 
     def get_choices_list(self):
@@ -217,11 +222,11 @@ class GameEngine:
                             else:
                                 action = self.actions[self.action_idx]
                                 if action == "Next": cmd = " "
-                                elif action == "View Script": self.show_script = not self.show_script
-                                elif action == "Reload": cmd = "R"
                                 elif action == "Back": cmd = "B"
-                                elif action == "Edit": cmd = "DO_EDIT"
-                                elif action == "Exit": return
+                                elif action == "Reload Section": cmd = "R"
+                                elif action == "Edit Assets": cmd = "DO_EDIT"
+                                elif action == "View Script": self.show_script = not self.show_script
+                                elif action == "Exit Game": return
                         elif key.key == Keys.Escape or key.key == Keys.ControlC: return
                     
                     if cmd:
