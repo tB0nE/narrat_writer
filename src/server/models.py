@@ -33,7 +33,7 @@ class GenerateRequest(BaseModel):
 class DialogueResponse(BaseModel):
     type: str # talk, choice, end, missing_label
     character: Optional[str] = None
-    text: str
+    text: Optional[str] = None
     options: Optional[Dict[str, Any]] = None
     meta: Optional[Dict[str, Any]] = None
     current_label: Optional[str] = None

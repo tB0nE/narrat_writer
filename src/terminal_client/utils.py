@@ -18,10 +18,11 @@ def ensure_server_running():
         requests.get(f"{BASE_URL}/games", timeout=0.5)
         return None
     except:
+        log_file = open("narrat_server.log", "a")
         proc = subprocess.Popen(
             [sys.executable, "server.py"],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=log_file,
             preexec_fn=os.setsid
         )
         for _ in range(15):
