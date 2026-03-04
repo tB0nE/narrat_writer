@@ -48,12 +48,14 @@ class GameEngine:
         return "\n".join(lines)
 
     def get_descriptions_panel(self):
-        char = self.data.get("character", "narrator")
-        meta = self.data.get("meta", {})
+        char = self.data.get("character") or "narrator"
+        meta = self.data.get("meta") or {}
         bg = self.data.get("background", "None")
         bg_desc = self.data.get("background_desc", "")
         text = f"[bold cyan]Background:[/bold cyan] {bg}\n[dim]{bg_desc}[/dim]\n\n"
-        text += f"[bold cyan]Active Character:[/bold cyan] {char.capitalize()}\n"
+        
+        char_name = str(char).capitalize() if char else "Narrator"
+        text += f"[bold cyan]Active Character:[/bold cyan] {char_name}\n"
         if meta.get("emotion"): text += f"[dim]Emotion: {meta['emotion']}[/dim]\n"
         if meta.get("description"): text += f"\n[italic]{meta['description']}[/italic]"
         return Panel(Align.center(text, vertical="middle"), title="References", border_style="magenta")

@@ -28,10 +28,21 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
         if line_data is None:
             if state.current_label not in parser.labels:
                 last_char = state.dialogue_log[-1]["character"] if state.dialogue_log else "narrator"
+                bg = state.variables.get("__current_bg", "None")
+                char_meta = {
+                    "profile": get_reference(game_id, "characters", last_char, "profile"),
+                    "description": get_reference(game_id, "characters", last_char, "description"),
+                    "placeholder": get_reference(game_id, "characters", last_char, "idle"),
+                    "emotion": state.variables.get(f"__emo_{last_char}", "Neutral")
+                }
                 return DialogueResponse(
                     type="missing_label", 
                     character=last_char,
-                    meta={"target": state.current_label}, 
+                    meta={"target": state.current_label, **char_meta}, 
+                    background=bg,
+                    background_desc=get_reference(game_id, "backgrounds", bg) if bg != "None" else "",
+                    current_label=state.current_label,
+                    line_index=state.line_index,
                     text=f"Label '{state.current_label}' missing.", 
                     variables=state.variables, 
                     dialogue_log=state.dialogue_log
