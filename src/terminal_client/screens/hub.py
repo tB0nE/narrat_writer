@@ -26,18 +26,44 @@ class GameHub:
         while True:
             res = requests.get(f"{self.base_url}/games/{game_id}/metadata")
             meta = res.json()
-            options = ["Start New Game", "Load Game", "Manage Assets", "Edit Game", "Back"]
+            options = ["Start New Game", "Load Game", "Manage Assets", "Edit Game", "Validate Script", "Back"]
             choice = get_menu_choice(options, lambda opts, idx: self.render_game_hub(opts, idx, meta))
             if choice == "Back" or choice is None: return
             if choice == "Start New Game":
-                sid = questionary.text("Enter new session name", default="autosave").ask()
-                if sid:
-                    from src.terminal_client.screens.engine import GameEngine
-                    engine = GameEngine(game_id, sid, self.console, self.base_url)
-                    engine.run()
+                timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M")
+                sid = f"{game_id}_{timestamp}"
+                from src.terminal_client.screens.engine import GameEngine
+                engine = GameEngine(game_id, sid, self.console, self.base_url)
+                engine.run()
             elif choice == "Load Game": self.save_manager_flow(game_id)
             elif choice == "Manage Assets": self.asset_manager_flow(game_id, meta)
             elif choice == "Edit Game": self.edit_metadata_flow(game_id, meta)
+            elif choice == "Validate Script": self.validate_script_flow(game_id)
+
+    def validate_script_flow(self, game_id):
+        """Calls the validation API and displays results in the UI."""
+        with console.status("[bold green]Validating script...[/bold green]"):
+            res = requests.get(f"{self.base_url}/games/{game_id}/validate")
+            data = res.json()
+        
+        layout = make_intro_layout()
+        if data["valid"]:
+            info = "[bold green]✓ Script is valid![/bold green]\n\nAll labels, indentation, and core syntax rules passed validation."
+            border = "green"
+        else:
+            info = f"[bold red]✗ Script has {len(data['errors'])} errors:[/bold red]\n\n"
+            for err in data["errors"][:20]:
+                info += f"• {err}\n"
+            if len(data["errors"]) > 20:
+                info += f"\n[dim]... and {len(data['errors'])-20} more errors.[/dim]"
+            border = "red"
+            
+        layout["left"].update(Panel(Align.left(info, vertical="middle"), title="Validation Results", border_style=border, padding=(1, 3)))
+        layout["right"].update(Panel(Align.center("[bold yellow][Enter] to continue[/bold yellow]", vertical="middle"), title="Action", border_style="yellow"))
+        
+        with Live(layout, screen=True, auto_refresh=False) as live:
+            live.refresh()
+            questionary.press_any_key_to_continue().ask()
 
     def render_game_hub(self, options, selected_idx, meta):
         """Renders the game-specific hub screen with metadata summary and interactive menu."""
