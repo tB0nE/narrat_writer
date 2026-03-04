@@ -27,7 +27,15 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
         
         if line_data is None:
             if state.current_label not in parser.labels:
-                return DialogueResponse(type="missing_label", meta={"target": state.current_label}, text=f"Label '{state.current_label}' missing.", variables=state.variables, dialogue_log=state.dialogue_log)
+                last_char = state.dialogue_log[-1]["character"] if state.dialogue_log else "narrator"
+                return DialogueResponse(
+                    type="missing_label", 
+                    character=last_char,
+                    meta={"target": state.current_label}, 
+                    text=f"Label '{state.current_label}' missing.", 
+                    variables=state.variables, 
+                    dialogue_log=state.dialogue_log
+                )
             return DialogueResponse(type="end", text="End of script.", variables=state.variables, dialogue_log=state.dialogue_log)
 
         line_num, line_text = line_data

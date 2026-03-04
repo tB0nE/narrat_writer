@@ -141,7 +141,16 @@ class GameEngine:
         main["diag"].update(Panel(pad + "\n\n".join(lines), title="Dialogue", border_style="cyan"))
         footer_content = ""
         if self.data.get("type") == "missing_label": 
-            footer_content = f"\n[bold red]Label '{self.data['meta']['target']}' is missing![/bold red]\n"
+            target = self.data.get("meta", {}).get("target", "unknown")
+            footer_content = f"[bold red]Label '{target}' is missing![/bold red]\n\n"
+            # Interactive options for missing label
+            ml_opts = ["Generate with AI", "Back (Undo)"]
+            ml_lines = []
+            for i, opt in enumerate(ml_opts):
+                if self.focus == "choices" and i == self.choice_idx:
+                    ml_lines.append(f"> [bold black on yellow] {opt} [/bold black on yellow]")
+                else: ml_lines.append(f"  {opt}")
+            footer_content += "\n".join(ml_lines)
         elif self.data.get("type") == "choice": 
             choices = self.get_choices_list()
             footer_content = f"[bold white]Select an option:[/bold white]\n\n" + choices
@@ -173,12 +182,14 @@ class GameEngine:
                     live.update(self.display_game()); live.refresh()
                     keys = input_obj.read_keys()
                     if not keys:
-                        time.sleep(0.05); continue
+                        if os.getenv("NARRAT_TEST_MODE") != "1": time.sleep(0.05)
+                        continue
                     
                     cmd = None
                     for key in keys:
                         if key.key == Keys.Tab:
-                            if self.data.get("type") == "choice": self.focus = "actions" if self.focus == "choices" else "choices"
+                            if self.data.get("type") in ["choice", "missing_label"]: 
+                                self.focus = "actions" if self.focus == "choices" else "choices"
                             else: self.focus = "actions"
                         elif key.key == Keys.Left:
                             if self.focus == "actions": self.action_idx = (self.action_idx - 1) % len(self.actions)
@@ -186,16 +197,20 @@ class GameEngine:
                             if self.focus == "actions": self.action_idx = (self.action_idx + 1) % len(self.actions)
                         elif key.key == Keys.Up:
                             if self.focus == "choices":
-                                count = len(self.data.get("options", {}))
+                                count = len(self.data.get("options", {})) if self.data.get("type") == "choice" else 2
                                 if count: self.choice_idx = (self.choice_idx - 1) % count
                         elif key.key == Keys.Down:
                             if self.focus == "choices":
-                                count = len(self.data.get("options", {}))
+                                count = len(self.data.get("options", {})) if self.data.get("type") == "choice" else 2
                                 if count: self.choice_idx = (self.choice_idx + 1) % count
                         elif key.key == Keys.Enter or key.key == Keys.ControlM:
                             if self.focus == "choices":
-                                opt_keys = list(self.data["options"].keys())
-                                cmd = opt_keys[self.choice_idx]
+                                if self.data.get("type") == "choice":
+                                    opt_keys = list(self.data["options"].keys())
+                                    cmd = opt_keys[self.choice_idx]
+                                elif self.data.get("type") == "missing_label":
+                                    # 0: Generate, 1: Back
+                                    cmd = "AI_GENERATE" if self.choice_idx == 0 else "B"
                                 self.focus, self.choice_idx = "actions", 0
                             else:
                                 action = self.actions[self.action_idx]
@@ -205,20 +220,26 @@ class GameEngine:
                                 elif action == "Back": cmd = "B"
                                 elif action == "Edit": cmd = "DO_EDIT"
                                 elif action == "Exit": return
-                        elif key.key == Keys.ControlC: return
+                        elif key.key == Keys.Escape or key.key == Keys.ControlC: return
                     
                     if cmd:
                         if cmd == "DO_EDIT":
                             live.stop()
                             self.handle_edit()
                             live.start()
-                            # After edit, refresh the screen
                             res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "B_REPROCESS"})
                             self.data = res.json()
+                        elif cmd == "AI_GENERATE":
+                            live.stop()
+                            with console.status("AI is generating missing content..."):
+                                requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/generate", json={"target": self.data["meta"]["target"]})
+                            res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
+                            self.data = res.json(); live.start()
                         else:
                             res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": str(cmd)})
                             self.data = res.json()
-                            if self.data.get("type") == "choice": self.focus, self.choice_idx = "choices", 0
+                            if self.data.get("type") in ["choice", "missing_label"]: 
+                                self.focus, self.choice_idx = "choices", 0
                             
                             if self.data.get("type") == "end":
                                 live.stop()
@@ -231,15 +252,6 @@ class GameEngine:
                                     res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
                                     self.data = res.json(); live.start()
                                 else: return
-                            
-                            if self.data.get("type") == "missing_label":
-                                live.stop()
-                                c = questionary.select(f"Label '{self.data['meta']['target']}' is missing!", choices=["Generate with AI", "Back (Undo)"]).ask()
-                                if c == "Generate with AI":
-                                    requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/generate", json={"target": self.data["meta"]["target"]})
-                                    res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
-                                else: res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "B"})
-                                self.data = res.json(); live.start()
 
     def handle_edit(self):
         p = f"games/{self.game_id}/phase1.narrat"
