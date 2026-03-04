@@ -107,6 +107,27 @@ class GameHub:
             live.refresh()
             questionary.press_any_key_to_continue().ask()
 
+    def render_save_manager(self, opts, idx, saves):
+        """Compatibility wrapper for tests."""
+        state = {"saves": saves, "main_idx": idx}
+        # In a real run, this is inside save_manager_flow_shared
+        # but for standalone test rendering we provide this
+        layout = make_intro_layout()
+        if idx < len(saves):
+            s = saves[idx]
+            dt = datetime.fromtimestamp(s['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+            info = f"[bold cyan]Save: {s['id']}[/bold cyan]\n[dim]{dt}[/dim]\n\n"
+            info += f"[bold white]Location:[/bold white] {s['label']}\n\n"
+            info += f"[bold white]Last Dialogue:[/bold white]\n[italic]\"{s['last_text']}\"[/italic]"
+        else: info = "[dim italic]Back to game hub.[/dim italic]"
+        layout["left"].update(Panel(Align.left(info, vertical="middle"), title="Save Preview", border_style="cyan", padding=(1, 3)))
+        menu_text = ""
+        for i, opt in enumerate(opts):
+            if i == idx: menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
+            else: menu_text += f"  {opt}\n"
+        layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Saves", border_style="yellow"))
+        return layout
+
     def render_game_hub(self, options, selected_idx, meta):
         """Renders the game-specific hub screen with metadata summary and interactive menu."""
         layout = make_intro_layout()
