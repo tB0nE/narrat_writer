@@ -12,11 +12,51 @@ def get_game_path(game_id: str, *subpaths):
     return os.path.join(games_dir, game_id, *subpaths)
 
 def load_metadata(game_id: str) -> Optional[GameMetadata]:
-    """Loads metadata for a specific game."""
+    """Loads metadata for a specific game, syncing with folders and script assets."""
     path = get_game_path(game_id, "metadata.json")
     if os.path.exists(path):
         with open(path, "r") as f:
-            return GameMetadata(**json.load(f))
+            meta = GameMetadata(**json.load(f))
+        
+        from src.server.parser import NarratParser
+        parser = NarratParser(game_id)
+        detected = parser.detect_assets()
+
+        # 1. Sync Characters with folders
+        char_dir = get_game_path(game_id, "reference", "characters")
+        if os.path.exists(char_dir):
+            existing_folders = [d for d in os.listdir(char_dir) if os.path.isdir(os.path.join(char_dir, d))]
+            # Preserve order from meta but filter out missing folders (case-insensitive)
+            synced_chars = [c for c in meta.characters if any(f.lower() == c.lower() for f in existing_folders)]
+            # Add new folders that aren't already represented in metadata
+            for folder in existing_folders:
+                if not any(c.lower() == folder.lower() for c in synced_chars):
+                    synced_chars.append(folder)
+            
+            # Add new detected characters from script
+            for char in detected["characters"]:
+                if not any(c.lower() == char.lower() for c in synced_chars):
+                    synced_chars.append(char)
+            meta.characters = synced_chars
+
+        # 2. Sync Backgrounds with folders and script
+        bg_dir = get_game_path(game_id, "reference", "backgrounds")
+        if os.path.exists(bg_dir):
+            existing_bgs = [f.replace(".txt", "") for f in os.listdir(bg_dir) if f.endswith(".txt")]
+            meta.backgrounds = sorted(list(set(meta.backgrounds) | set(detected["backgrounds"]) | set(existing_bgs)))
+        else:
+            meta.backgrounds = sorted(list(set(meta.backgrounds) | set(detected["backgrounds"])))
+
+        # 3. Sync Variables from script
+        meta.variables = sorted(list(set(meta.variables) | set(detected["variables"])))
+
+        # 4. Sync Scenes from folders
+        scene_dir = get_game_path(game_id, "reference", "scenes")
+        if os.path.exists(scene_dir):
+            existing_scenes = [f.replace(".txt", "") for f in os.listdir(scene_dir) if f.endswith(".txt")]
+            meta.scenes = sorted(list(set(meta.scenes) | set(existing_scenes)))
+        
+        return meta
     return None
 
 def save_metadata(game_id: str, meta: GameMetadata):
@@ -47,6 +87,8 @@ def get_reference(game_id: str, category: str, name: str, sub_type: str = None):
     """Fetches a reference text file (character desc, background info, etc.)."""
     if category == "backgrounds":
         path = get_game_path(game_id, "reference", "backgrounds", f"{name}.txt")
+    elif category == "scenes":
+        path = get_game_path(game_id, "reference", "scenes", f"{name}.txt")
     elif category == "characters":
         suffix = sub_type or "description"
         path = get_game_path(game_id, "reference", "characters", name, f"{name}_{suffix}.txt")

@@ -28,7 +28,7 @@ class GameHub:
         while True:
             res = requests.get(f"{self.base_url}/games/{game_id}/metadata")
             meta = res.json()
-            options = ["Start New Game", "Load Game", "Manage Assets", "Edit Game", "Validate Script", "Back"]
+            options = ["Start New Game", "Load Game", "Edit Game Metadata", "Characters", "Backgrounds", "Scenes", "Variables", "Validate Script", "Back"]
             
             with Live(self.render_game_hub(options, 0, meta), screen=True, auto_refresh=False) as live:
                 idx = 0
@@ -63,14 +63,13 @@ class GameHub:
                                 self.save_manager_flow_shared(game_id, live, input_obj)
                                 break # Refresh
                             
-                            elif action_choice == "Manage Assets":
-                                # For now we keep individual loops but we should unify them all eventually
+                            elif action_choice in ["Characters", "Backgrounds", "Scenes", "Variables"]:
                                 live.stop()
-                                self.asset_manager_flow(game_id, meta)
+                                self.asset_manager_flow(game_id, meta, action_choice)
                                 live.start()
                                 break
                             
-                            elif action_choice == "Edit Game":
+                            elif action_choice == "Edit Game Metadata":
                                 live.stop()
                                 self.edit_metadata_flow(game_id, meta)
                                 live.start()
@@ -134,8 +133,11 @@ class GameHub:
         info = f"[bold cyan]{meta['title']}[/bold cyan]\n\n"
         info += f"{meta['summary']}\n\n"
         info += f"[bold white]Genre:[/bold white] {meta.get('genre', 'Unknown')}\n"
+        
         chars = meta.get('characters', [])
-        info += f"[bold white]Characters:[/bold white] {', '.join(chars) if chars else 'None'}\n\n"
+        cap_chars = [c.capitalize() for c in chars]
+        info += f"[bold white]Characters:[/bold white] {', '.join(cap_chars[:10]) if cap_chars else 'None'}{'...' if len(cap_chars) > 10 else ''}\n\n"
+        
         plot = meta.get('plot_outline', '')
         if plot:
             info += f"[bold white]Plot Outline:[/bold white]\n{plot[:500]}{'...' if len(plot) > 500 else ''}"
@@ -390,14 +392,21 @@ class GameHub:
                         time.sleep(2)
                         live.start()
 
-    def asset_manager_flow(self, game_id, meta):
+    def asset_manager_flow(self, game_id, meta, start_category=None):
         """Advanced management for game reference assets using a single-loop interaction."""
-        state = {"mode": "view", "category": None, "asset_id": None, "field": None, "sub_options": [], "sub_idx": 0, "main_idx": 0, "asset_content": ""}
-        categories = ["Backgrounds", "Characters", "Scenes", "Back"]
+        state = {"mode": "view", "category": start_category, "asset_id": None, "field": None, "sub_options": [], "sub_idx": 0, "main_idx": 0, "asset_content": ""}
+        categories = ["Backgrounds", "Characters", "Scenes", "Variables", "Back"]
         input_obj = create_input()
 
         def fetch_preview(cat, aid):
             try:
+                if cat.lower() == "characters":
+                    res_p = requests.get(f"{self.base_url}/games/{game_id}/assets/characters/{aid}", params={"type": "profile"}, timeout=0.5)
+                    res_d = requests.get(f"{self.base_url}/games/{game_id}/assets/characters/{aid}", params={"type": "description"}, timeout=0.5)
+                    profile = res_p.json().get("content", "[No profile]") if res_p.status_code == 200 else "[No profile]"
+                    desc = res_d.json().get("content", "[No description]") if res_d.status_code == 200 else "[No description]"
+                    return f"[bold yellow]Profile:[/bold yellow]\n{profile}\n\n[bold yellow]Description:[/bold yellow]\n{desc}"
+                
                 res = requests.get(f"{self.base_url}/games/{game_id}/assets/{cat.lower()}/{aid}", timeout=0.5)
                 if res.status_code == 200: return res.json().get("content", "")
             except: pass
@@ -416,24 +425,28 @@ class GameHub:
             
             # Left Panel Content
             if state["mode"] == "view":
-                info = f"[bold cyan]Asset Manager[/bold cyan]\n\n"
+                info = f"[bold cyan]{state['category'] or 'Asset Manager'}[/bold cyan]\n\n"
                 if state.get("category_preview"):
                     cat = state["category_preview"]
-                    info += f"[bold yellow]Category: {cat}[/bold yellow]\n"
+                    info += f"[bold yellow]Previewing Category: {cat}[/bold yellow]\n"
                     assets = state.get("category_assets", [])
                     if assets:
                         info += "\n[dim]Available Assets:[/dim]\n"
                         for a in assets[:15]:
-                            info += f"• {a}\n"
+                            display_name = a.capitalize() if cat.lower() == "characters" else a
+                            info += f"• {display_name}\n"
                         if len(assets) > 15:
                             info += f"[dim]... and {len(assets)-15} more[/dim]"
                     else:
                         info += "\n[dim italic]No assets found in this category.[/dim italic]"
                 else:
-                    info += "Select a category on the right to browse and edit game assets.\n\n"
+                    info += "Select an asset on the right to browse and edit its properties.\n\n"
                     info += "[dim]Current Selection:[/dim]\n"
                     info += f"Category: [white]{state['category'] or 'None'}[/white]\n"
-                    info += f"Asset: [white]{state['asset_id'] or 'None'}[/white]"
+                    asset_display = state['asset_id']
+                    if asset_display and state['category'].lower() == "characters":
+                        asset_display = asset_display.capitalize()
+                    info += f"Asset: [white]{asset_display or 'None'}[/white]"
                 layout["left"].update(Panel(Align.left(info, vertical="middle"), title="Overview", border_style="cyan", padding=(1, 3)))
             
             elif state["mode"] == "select":
@@ -446,9 +459,10 @@ class GameHub:
             elif state["mode"] == "preview":
                 # Use asset_id_preview for live scrolling, asset_id for locked action menu
                 aid = state.get("asset_id_preview") or state.get("asset_id")
-                info = f"[bold cyan]Asset: {aid}[/bold cyan] ({state['category'][:-1]})\n\n"
+                display_aid = aid.capitalize() if state['category'].lower() == "characters" else aid
+                info = f"[bold cyan]Asset: {display_aid}[/bold cyan] ({state['category'][:-1]})\n\n"
                 content = state.get("asset_content", "")
-                info += content[:800] + ("..." if len(content) > 800 else "")
+                info += content[:1200] + ("..." if len(content) > 1200 else "")
                 layout["left"].update(Panel(Align.left(info, vertical="middle"), title="Asset Preview", border_style="cyan", padding=(1, 3)))
 
             elif state["mode"] == "loading":
@@ -459,15 +473,35 @@ class GameHub:
             menu_text = ""
             opts = state.get("active_menu", categories)
             for i, opt in enumerate(opts):
-                if i == state["main_idx"]: menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
-                else: menu_text += f"  {opt}\n"
+                label = opt
+                if state["category"] and not state["asset_id"] and opt not in ["Add New", "Scan", "Back"]:
+                    if state["category"].lower() == "characters":
+                        label = opt.capitalize()
+                
+                if i == state["main_idx"]: menu_text += f"> [bold yellow]{label}[/bold yellow]\n"
+                else: menu_text += f"  {label}\n"
             layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Asset Menu", border_style="yellow"))
             return layout
 
-        state["active_menu"] = categories
-        # Initial preview
-        state["category_preview"] = categories[0]
-        state["category_assets"] = fetch_category_assets(categories[0])
+        # Setup initial state based on start_category
+        if start_category:
+            state["category"] = start_category
+            state["mode"], state["field"] = "loading", start_category
+            try:
+                res = requests.get(f"{self.base_url}/games/{game_id}/assets/{start_category.lower()}")
+                state["active_menu"] = ["Add New"] + res.json()["assets"] + ["Back"]
+                state["main_idx"] = 0; state["mode"] = "view"
+                if len(state["active_menu"]) > 1 and state["active_menu"][1] not in ["Add New", "Back"]:
+                    state["mode"], state["asset_id_preview"] = "preview", state["active_menu"][1]
+                    state["asset_content"] = fetch_preview(start_category, state["active_menu"][1])
+            except:
+                state["active_menu"] = ["Add New", "Back"]
+                state["mode"] = "view"
+        else:
+            state["active_menu"] = categories
+            # Initial preview
+            state["category_preview"] = categories[0]
+            state["category_assets"] = fetch_category_assets(categories[0])
         
         with Live(render_assets(state), screen=True, auto_refresh=False) as live:
             with input_obj.raw_mode():
@@ -495,7 +529,7 @@ class GameHub:
 
                                 # 2. Asset Level Preview logic - Only if list changed
                                 elif state["category"] and not state["asset_id"] and old_idx != state["main_idx"]:
-                                    if choice not in ["Add New", "Back"]:
+                                    if choice not in ["Add New", "Scan", "Back"]:
                                         state["mode"], state["asset_id_preview"] = "preview", choice
                                         state["asset_content"] = fetch_preview(state["category"], choice)
                                     else:
@@ -511,13 +545,15 @@ class GameHub:
                                         state["mode"], state["field"] = "loading", state["category"]
                                         live.update(render_assets(state)); live.refresh()
                                         res = requests.get(f"{self.base_url}/games/{game_id}/assets/{state['category'].lower()}")
-                                        state["active_menu"] = res.json()["assets"] + ["Add New", "Back"]
+                                        state["active_menu"] = ["Add New", "Scan"] + res.json()["assets"] + ["Back"]
                                         state["main_idx"] = 0; state["mode"] = "view"
                                         # Immediate preview if first is asset
-                                        if state["active_menu"][0] not in ["Add New", "Back"]:
-                                            state["mode"], state["asset_id_preview"] = "preview", state["active_menu"][0]
-                                            state["asset_content"] = fetch_preview(state["category"], state["active_menu"][0])
+                                        # Index 2 because 0 is Add New, 1 is Scan
+                                        if len(state["active_menu"]) > 2 and state["active_menu"][2] not in ["Add New", "Scan", "Back"]:
+                                            state["mode"], state["asset_id_preview"] = "preview", state["active_menu"][2]
+                                            state["asset_content"] = fetch_preview(state["category"], state["active_menu"][2])
                                     else: # In asset list
+                                        if start_category: return # Go back to hub
                                         state["category"] = None; state["active_menu"] = categories; state["main_idx"] = 0; state["mode"] = "view"; state["asset_id_preview"] = None
                                     continue
 
@@ -528,12 +564,13 @@ class GameHub:
                                     state["mode"], state["field"] = "loading", choice
                                     live.update(render_assets(state)); live.refresh()
                                     res = requests.get(f"{self.base_url}/games/{game_id}/assets/{choice.lower()}")
-                                    state["active_menu"] = res.json()["assets"] + ["Add New", "Back"]
+                                    # User wants Add New first, then existing, then Back
+                                    state["active_menu"] = ["Add New", "Scan"] + res.json()["assets"] + ["Back"]
                                     state["main_idx"] = 0; state["mode"] = "view"
                                     # Trigger immediate preview if first item is an asset
-                                    if state["active_menu"][0] not in ["Add New", "Back"]:
-                                        state["mode"], state["asset_id_preview"] = "preview", state["active_menu"][0]
-                                        state["asset_content"] = fetch_preview(choice, state["active_menu"][0])
+                                    if len(state["active_menu"]) > 2 and state["active_menu"][2] not in ["Add New", "Scan", "Back"]:
+                                        state["mode"], state["asset_id_preview"] = "preview", state["active_menu"][2]
+                                        state["asset_content"] = fetch_preview(choice, state["active_menu"][2])
                                 
                                 # 2. Asset Selection
                                 elif state["category"] and not state["asset_id"]:
@@ -541,42 +578,107 @@ class GameHub:
                                         live.stop(); console.clear(); console.print(render_assets(state))
                                         new_id = questionary.text("Unique ID?").ask()
                                         if new_id:
+                                            if state["category"].lower() == "characters":
+                                                new_id = new_id.lower().replace(" ", "_")
                                             state["asset_id"] = new_id; state["asset_id_preview"] = new_id
-                                            state["active_menu"] = ["Rename Globally", "Edit Description", "AI Generate Description", "Back"]
+                                            state["active_menu"] = ["Rename", "Edit Description", "Edit Profile", "AI Generate Description", "Back"]
                                             state["main_idx"] = 0; state["mode"] = "preview"; state["asset_content"] = ""
+                                        live.start()
+                                    elif choice == "Scan":
+                                        state["mode"], state["field"] = "loading", "Scanning script..."
+                                        live.update(render_assets(state)); live.refresh()
+                                        res = requests.post(f"{self.base_url}/games/{game_id}/assets/scan")
+                                        added = res.json().get("added", {})
+                                        count = sum(len(v) for v in added.values())
+                                        
+                                        live.stop()
+                                        if count > 0:
+                                            summary = "\n".join([f"  {k.capitalize()}: {', '.join(v)}" for k, v in added.items() if v])
+                                            console.print(f"[bold green]Scan complete![/bold green] Added {count} new assets:\n{summary}")
+                                        else:
+                                            console.print("[bold yellow]Scan complete. No new assets found.[/bold yellow]")
+                                        questionary.press_any_key_to_continue().ask()
+                                        
+                                        # Reload list
+                                        res = requests.get(f"{self.base_url}/games/{game_id}/assets/{state['category'].lower()}")
+                                        state["active_menu"] = ["Add New", "Scan"] + res.json()["assets"] + ["Back"]
+                                        state["main_idx"] = 1 # Stay on Scan
+                                        state["mode"] = "view"
                                         live.start()
                                     else:
                                         state["asset_id"] = choice; state["asset_id_preview"] = choice
                                         state["mode"], state["field"] = "loading", choice
                                         live.update(render_assets(state)); live.refresh()
-                                        res = requests.get(f"{self.base_url}/games/{game_id}/assets/{state['category'].lower()}/{choice}")
-                                        state["asset_content"] = res.json().get("content", "")
-                                        state["active_menu"] = ["Rename Globally", "Edit Description", "AI Generate Description", "Back"]
+                                        state["asset_content"] = fetch_preview(state["category"], choice)
+                                        
+                                        # 1. Base actions available for all assets
+                                        if state["category"].lower() == "characters":
+                                            actions = ["Rename", "Edit Description", "Edit Profile", "AI Generate Description"]
+                                        else:
+                                            actions = ["Rename", "Edit Description", "AI Generate Description"]
+                                            
+                                        # 2. Add Delete option. Note: Server-side validation will block
+                                        # deletion if the asset is still detected within the narrat script.
+                                        actions.append("Delete")
+                                        actions.append("Back")
+                                        
+                                        state["active_menu"] = actions
                                         state["main_idx"] = 0; state["mode"] = "preview"
 
                                 # 3. Action Selection
                                 elif state["asset_id"]:
-                                    if choice == "Rename Globally":
+                                    if choice == "Rename":
                                         live.stop(); console.clear(); console.print(render_assets(state))
                                         ni = questionary.text(f"New ID for {state['asset_id']}").ask()
                                         if ni:
+                                            # Normalize character IDs: lowercase and underscores
+                                            if state["category"].lower() == "characters":
+                                                ni = ni.lower().replace(" ", "_")
                                             res = requests.post(f"{self.base_url}/games/{game_id}/assets/rename", json={"category": state["category"].lower(), "old_id": state["asset_id"], "new_id": ni})
                                             if res.status_code == 200: state["asset_id"] = ni
                                         live.start()
-                                    elif choice == "Edit Description":
+                                    elif choice == "Delete":
+                                        # Deletion is permitted ONLY if the asset is not found in the script.
+                                        # This is enforced by the server's DELETE handler.
+                                        live.stop()
+                                        if questionary.confirm(f"Delete {state['asset_id']}?").ask():
+                                            res = requests.delete(f"{self.base_url}/games/{game_id}/assets/{state['category'].lower()}/{state['asset_id']}")
+                                            if res.status_code == 200:
+                                                state["asset_id"] = None
+                                                # Reload list
+                                                res_list = requests.get(f"{self.base_url}/games/{game_id}/assets/{state['category'].lower()}")
+                                                state["active_menu"] = ["Add New", "Scan"] + res_list.json()["assets"] + ["Back"]
+                                                state["main_idx"] = 0; state["mode"] = "view"
+                                            else:
+                                                console.print(f"[red]Error: {res.json().get('detail', 'Unknown error')}[/red]")
+                                                time.sleep(2)
+                                        live.start()
+                                    elif choice in ["Edit Description", "Edit Profile"]:
+                                        ctype = "description" if "Description" in choice else "profile"
+                                        # Fetch the latest content for this specific type
+                                        res = requests.get(f"{self.base_url}/games/{game_id}/assets/{state['category'].lower()}/{state['asset_id']}", params={"type": ctype})
+                                        current_val = res.json().get("content", "")
+                                        
                                         res_config = requests.get(f"{self.base_url}/config")
                                         editor = res_config.json().get("editor", "")
                                         live.stop(); console.clear(); console.print(render_assets(state))
                                         if editor and editor != "None":
-                                            console.print(f"\n[yellow]Opening {editor} for {state['asset_id']}...[/yellow]")
+                                            console.print(f"\n[yellow]Opening {editor} for {state['asset_id']} ({ctype})...[/yellow]")
                                             time.sleep(0.3); console.clear()
-                                            nv = edit_text_in_external_editor(state["asset_content"])
+                                            nv = edit_text_in_external_editor(current_val)
                                         else:
-                                            nv = questionary.text("Description?", default=state["asset_content"]).ask()
+                                            nv = questionary.text(f"{choice}?", default=current_val).ask()
                                         
                                         if nv is not None:
-                                            requests.post(f"{self.base_url}/games/{game_id}/sessions/any/edit", json={"category": "reference", "action": "update", "sub_category": state["category"].lower()[:-1], "target": state["asset_id"], "content": nv})
-                                            state["asset_content"] = nv
+                                            requests.post(f"{self.base_url}/games/{game_id}/sessions/any/edit", json={
+                                                "category": "reference", 
+                                                "action": "update", 
+                                                "sub_category": state["category"].lower()[:-1], 
+                                                "target": state["asset_id"], 
+                                                "content": nv,
+                                                "meta": {"type": ctype}
+                                            })
+                                            state["asset_content"] = fetch_preview(state["category"], state["asset_id"])
                                         live.start()
                                     elif choice == "AI Generate Description":
                                         state["mode"], state["field"] = "loading", "AI Generation"

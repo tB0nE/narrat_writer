@@ -60,3 +60,22 @@ def test_invalid_game_step(client):
     response = client.post("/games/non_existent/sessions/s/step", json={"command": " "})
     # New behavior: returns missing_label for labels that don't exist
     assert response.json()["type"] == "missing_label"
+
+def test_list_assets(client, test_game):
+    # 1. Setup assets
+    char_p = os.path.join("test_games_tmp", test_game, "reference", "characters", "hero")
+    os.makedirs(char_p, exist_ok=True)
+    with open(os.path.join(char_p, "hero_profile.txt"), "w") as f: f.write("Hero profile")
+    
+    bg_p = os.path.join("test_games_tmp", test_game, "reference", "backgrounds", "forest.txt")
+    os.makedirs(os.path.dirname(bg_p), exist_ok=True)
+    with open(bg_p, "w") as f: f.write("Forest bg")
+    
+    # 2. List characters
+    res = client.get(f"/games/{test_game}/assets/characters")
+    assert "hero" in res.json()["assets"]
+    
+    # 3. List backgrounds
+    res = client.get(f"/games/{test_game}/assets/backgrounds")
+    assert "forest" in res.json()["assets"]
+

@@ -18,6 +18,9 @@ RULES:
 - The output must be strictly valid JSON."""
 
 GENERATE_STORY_PROMPT = """You are a Narrat script writer.
+Character Context:
+{char_context}
+
 Context of recent dialogue:
 {context}
 
@@ -48,6 +51,9 @@ Example:
 
 CONTINUE_STORY_PROMPT = """You are a Narrat script writer.
 The current scene has reached its end, and we need to continue the story.
+
+Character Context:
+{char_context}
 
 Context of recent dialogue:
 {context}
@@ -118,7 +124,10 @@ Game Metadata:
 {metadata}
 
 Requirements:
-- If it's a character, describe their appearance, personality, and role in the story.
+- If it's a character profile, describe their appearance, personality, role in the story, and core motivation.
+- If it's a character description, focus on a general visual summary.
+- If it's a character outfit, describe a specific set of clothing (e.g. 'casual', 'formal', 'battle').
+- If it's a character emotion, describe how their face or body language changes (e.g. 'happy', 'angry', 'sad').
 - If it's a background, describe the atmosphere, lighting, and key details of the location.
 - Keep it to 1-2 descriptive paragraphs.
 - Return ONLY the description text."""

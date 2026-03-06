@@ -105,6 +105,49 @@ class NarratParser:
         if index >= len(self.labels[label]): return None
         return self.labels[label][index]
 
+    def detect_assets(self):
+        """
+        Scans the narrat script content to automatically identify assets.
+        - Characters: extracted from 'talk', 'think' or shorthand line start.
+        - Backgrounds: extracted from 'background' command.
+        - Variables: extracted from 'set' or 'var' commands (base path only).
+        Returns a dictionary of sets containing the unique IDs found.
+        """
+        assets = {"characters": set(), "backgrounds": set(), "variables": set()}
+        valid_commands = [
+            "talk", "think", "narrate", "choice", "set", "var", "jump", 
+            "run", "return", "if", "else", "background", "scene", 
+            "play", "pause", "stop", "add", "add_item", "remove_item",
+            "start_quest", "complete_quest", "add_level", "roll", 
+            "add_stat", "set_stat", "set_screen", "random"
+        ]
+
+        if not os.path.exists(self.filepath): return assets
+        with open(self.filepath, "r") as f: content = f.read()
+        
+        # 1. Characters: from 'talk name', 'think name', or 'name "text"'
+        talk_matches = re.findall(r'^\s*talk\s+([\w_]+)', content, re.MULTILINE)
+        think_matches = re.findall(r'^\s*think\s+([\w_]+)', content, re.MULTILINE)
+        shorthand_matches = re.findall(r'^\s*([\w_]+)\s+"', content, re.MULTILINE)
+        
+        for name in talk_matches + think_matches + shorthand_matches:
+            if name not in valid_commands and name != "narrator":
+                assets["characters"].add(name.lower())
+
+        # 2. Backgrounds: from 'background name'
+        bg_matches = re.findall(r'^\s*background\s+([\w_]+)', content, re.MULTILINE)
+        for bg in bg_matches:
+            assets["backgrounds"].add(bg.lower())
+
+        # 3. Variables: from 'set name value' or 'var name value'
+        set_matches = re.findall(r'^\s*(?:set|var)\s+([\w_.]+)', content, re.MULTILINE)
+        for var in set_matches:
+            # We take the base name for variables (e.g. data.points -> data)
+            base_var = var.split('.')[0]
+            assets["variables"].add(base_var.lower())
+
+        return {k: sorted(list(v)) for k, v in assets.items()}
+
     def validate(self):
         """Returns (is_valid, list_of_errors)"""
         return len(self.errors) == 0, self.errors
