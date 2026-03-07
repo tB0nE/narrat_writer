@@ -24,6 +24,8 @@ class GameEngine:
         self.choice_idx = 0
         self.console = custom_console or console
         self.base_url = base_url or BASE_URL
+        self.label_map = {}
+        self.refresh_label_map()
         
         # Determine actions based on editor availability
         self.actions = ["Next", "Back", "Reload Section", "Edit Assets", "View Script"]
@@ -34,6 +36,13 @@ class GameEngine:
                 self.actions.append("Edit Script")
         except: pass
         self.actions.append("Exit Game")
+
+    def refresh_label_map(self):
+        try:
+            res = requests.get(f"{self.base_url}/games/{self.game_id}/label_map")
+            if res.status_code == 200:
+                self.label_map = res.json().get("label_map", {})
+        except: pass
 
     def get_actions_row(self):
         parts = []
@@ -83,18 +92,24 @@ class GameEngine:
         return Panel(table, title="Current State", border_style="green")
 
     def get_script_panel(self):
-        try:
-            with open(f"games/{self.game_id}/phase1.narrat", "r") as f: lines = f.readlines()
-        except: return Panel("Script file not found.", title="Script Viewer", border_style="red")
+        curr_label = self.data.get("current_label", "")
+        logical_index = self.data.get("line_index", 0)
+        rel_path = self.label_map.get(curr_label, "main.narrat")
         
-        curr_label, logical_index = self.data.get("current_label", ""), self.data.get("line_index", 0)
+        try:
+            # We must use the absolute path relative to the engine's perspective
+            full_path = os.path.join("games", self.game_id, "scripts", rel_path)
+            with open(full_path, "r") as f: lines = f.readlines()
+        except: 
+            return Panel(f"Script file not found: {rel_path}", title="Script Viewer", border_style="red")
+        
         label_file_idx = -1
         
         # 1. Find the label in the file
         for i, line in enumerate(lines):
             # Strict label match: 'label:' or 'label name:' at start of line
-            if re.match(rf"^{curr_label}:\s*(?://.*)?$", line.rstrip()) or \
-               re.match(rf"^label\s+{curr_label}:\s*(?://.*)?$", line.rstrip()):
+            if re.match(rf"^{curr_label}:\s*(?://.*)?$", line.strip()) or \
+               re.match(rf"^label\s+{curr_label}:\s*(?://.*)?$", line.strip()):
                 label_file_idx = i
                 break
         
@@ -243,12 +258,14 @@ class GameEngine:
                             live.stop()
                             if cmd == "EDIT_SCRIPT":
                                 # Find current line index in file for external editor
-                                p = f"games/{self.game_id}/phase1.narrat"
-                                with open(p, "r") as f: lines = f.readlines()
-                                file_idx = -1
                                 curr_label, l_idx = self.data.get("current_label"), self.data.get("line_index", 0)
+                                rel_path = self.label_map.get(curr_label, "main.narrat")
+                                full_p = os.path.join("games", self.game_id, "scripts", rel_path)
+                                
+                                with open(full_p, "r") as f: lines = f.readlines()
+                                file_idx = -1
                                 for i, line in enumerate(lines):
-                                    if re.match(rf"^{curr_label}:", line.strip()):
+                                    if re.match(rf"^(?:label\s+)?{curr_label}:", line.strip()):
                                         file_idx = i; break
                                 if file_idx != -1:
                                     count = 0
@@ -257,7 +274,7 @@ class GameEngine:
                                         if re.match(r"^[\w_]+:", lines[i].strip()): break
                                         if count == l_idx: file_idx = i; break
                                         count += 1
-                                open_in_external_editor(p, file_idx + 1)
+                                open_in_external_editor(full_p, file_idx + 1)
                             else:
                                 self.handle_edit()
                             live.start()
@@ -290,10 +307,12 @@ class GameEngine:
                                 else: return
 
     def handle_edit(self):
-        p = f"games/{self.game_id}/phase1.narrat"
-        with open(p, "r") as f: lines = f.readlines()
-        idx = -1
         curr_label, l_idx = self.data.get("current_label"), self.data.get("line_index", 0)
+        rel_path = self.label_map.get(curr_label, "main.narrat")
+        full_p = os.path.join("games", self.game_id, "scripts", rel_path)
+        
+        with open(full_p, "r") as f: lines = f.readlines()
+        idx = -1
         for i, line in enumerate(lines):
             if re.match(rf"^(?:label\s+)?{curr_label}:\s*(?://.*)?$", line.strip()):
                 idx = i; break
@@ -312,17 +331,28 @@ class GameEngine:
             action = questionary.select("Action", choices=["Edit Manually", "Edit in External Editor", "Rewrite with AI", "Back"]).ask()
             if action == "Edit Manually":
                 nt = questionary.text("New Text").ask()
-                if nt: requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "script", "action": "update", "target": str(idx), "content": f"talk {self.data.get('character', 'narrator')} \"{nt}\""})
+                if nt: requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit", json={
+                    "category": "script", "action": "update", "target": str(idx), 
+                    "content": f"talk {self.data.get('character', 'narrator')} \"{nt}\"",
+                    "meta": {"path": rel_path}
+                })
             elif action == "Edit in External Editor":
                 from src.terminal_client.utils import edit_text_in_external_editor
                 initial_text = self.data.get('text', '')
                 nt = edit_text_in_external_editor(initial_text)
-                if nt: requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "script", "action": "update", "target": str(idx), "content": f"talk {self.data.get('character', 'narrator')} \"{nt}\""})
+                if nt: requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit", json={
+                    "category": "script", "action": "update", "target": str(idx), 
+                    "content": f"talk {self.data.get('character', 'narrator')} \"{nt}\"",
+                    "meta": {"path": rel_path}
+                })
             elif action == "Rewrite with AI":
                 instr = questionary.text("Instruction?").ask()
                 if instr:
                     with console.status("AI is rewriting..."):
-                        res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit/ai", json={"target": str(idx), "content": instr})
+                        res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit/ai", json={
+                            "target": str(idx), "content": instr,
+                            "meta": {"path": rel_path}
+                        })
                     if res.status_code == 200: questionary.press_any_key_to_continue().ask()
         
         elif et == "Background":

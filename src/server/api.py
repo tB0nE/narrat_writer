@@ -134,6 +134,13 @@ async def get_game_labels(game_id: str):
         return {"labels": list(parser.labels.keys())}
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/games/{game_id}/label_map")
+async def get_game_label_map(game_id: str):
+    try:
+        parser = NarratParser(game_id)
+        return {"label_map": parser.label_to_file}
+    except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/games/{game_id}/metadata")
 async def get_game_metadata(game_id: str):
     meta = load_metadata(game_id)
@@ -292,6 +299,14 @@ async def update_script_content(game_id: str, req: Dict[str, str]):
     p = get_script_path(game_id, path)
     if not os.path.exists(p): raise HTTPException(status_code=404, detail="Script not found")
     with open(p, "w") as f: f.write(content)
+    return {"status": "success"}
+
+@app.delete("/games/{game_id}/scripts/content")
+async def delete_script(game_id: str, path: str):
+    if path == "main.narrat": raise HTTPException(status_code=400, detail="Cannot delete main.narrat")
+    p = get_script_path(game_id, path)
+    if not os.path.exists(p): raise HTTPException(status_code=404, detail="Script not found")
+    os.remove(p)
     return {"status": "success"}
 
 @app.get("/games/{game_id}/assets/{category}")
