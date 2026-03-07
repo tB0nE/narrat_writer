@@ -6,6 +6,9 @@ class GameMetadata(BaseModel):
     summary: str
     genre: str
     characters: List[str] = []
+    backgrounds: List[str] = []
+    scenes: List[str] = []
+    variables: List[str] = []
     starting_point: str = "main"
     plot_outline: Optional[str] = None
     prompt_prefix: Optional[str] = None

@@ -3,7 +3,30 @@
     "summary": "A neon-drenched journey through the streets of Neo-Tokyo as Anya, a skilled hacker caught in a web of corporate intrigue.",
     "genre": "Cyberpunk",
     "characters": [
-        "Anya"
+        "Anya",
+        "broker"
+    ],
+    "backgrounds": [
+        "anya_bedroom",
+        "club_bar_interior",
+        "neon_club",
+        "server_room"
+    ],
+    "scenes": [
+        "brute_force_path",
+        "club_bar",
+        "confront_broker",
+        "hacking_terminal",
+        "intimidate_broker",
+        "main",
+        "neon_view",
+        "scan_crowd",
+        "silent_path",
+        "underground_club"
+    ],
+    "variables": [
+        "has_woken_up",
+        "security_level"
     ],
     "starting_point": "main",
     "plot_outline": "",

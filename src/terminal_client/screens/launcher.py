@@ -228,7 +228,8 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                 info += f"{g['summary']}\n\n"
                 info += f"[bold white]Genre:[/bold white] {g.get('genre', 'Unknown')}\n"
                 chars = g.get('characters', [])
-                info += f"[bold white]Characters:[/bold white] {', '.join(chars) if chars else 'None'}\n\n"
+                cap_chars = [c.capitalize() for c in chars]
+                info += f"[bold white]Characters:[/bold white] {', '.join(cap_chars) if cap_chars else 'None'}\n\n"
                 plot = g.get('plot_outline', '')
                 if plot: info += f"[bold white]Plot Outline:[/bold white]\n{plot[:300]}{'...' if len(plot) > 300 else ''}"
             else: info = "[dim italic]Back to main menu.[/dim italic]"

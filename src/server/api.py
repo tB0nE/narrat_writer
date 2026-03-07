@@ -158,8 +158,14 @@ async def create_game(req: CreateGameRequest):
             raise HTTPException(status_code=500, detail=str(e))
     else: meta = req.manual_data or GameMetadata(title=req.name, summary="Custom", genre="Blank")
     
-    for sub in ["backgrounds", "characters", "scenes", "animations"]:
+    for sub in ["backgrounds", "characters", "scenes", "animations", "variables"]:
         os.makedirs(os.path.join(game_dir, "reference", sub), exist_ok=True)
+    
+    # Create individual character folders
+    if meta.characters:
+        for char in meta.characters:
+            os.makedirs(os.path.join(game_dir, "reference", "characters", char), exist_ok=True)
+    
     os.makedirs(os.path.join(game_dir, "saves"), exist_ok=True)
     save_metadata(req.name, meta)
     
@@ -175,12 +181,24 @@ async def create_game(req: CreateGameRequest):
     with open(os.path.join(game_dir, "phase1.narrat"), "w") as f: f.write(initial_script)
     return {"status": "success", "game_id": req.name}
 
+def get_full_character_context(game_id: str, meta: GameMetadata) -> str:
+    """Aggregates all character reference data into a context string for AI."""
+    context = "CHARACTER PROFILES AND DESCRIPTIONS:\n"
+    for char in meta.characters:
+        profile = get_reference(game_id, "characters", char, "profile")
+        description = get_reference(game_id, "characters", char, "description")
+        context += f"--- {char.capitalize()} ---\n"
+        context += f"Profile: {profile}\n"
+        context += f"Description: {description}\n\n"
+    return context
+
 @app.post("/games/{game_id}/sessions/{session_id}/generate")
 async def generate_more_story(game_id: str, session_id: str, req: Dict[str, Any]):
     target = req.get("target")
     state = load_session(game_id, session_id)
     meta = load_metadata(game_id)
     
+    char_context = get_full_character_context(game_id, meta) if meta else ""
     context = ""
     for entry in state.dialogue_log[-10:]:
         context += f"{entry['character']}: {entry['text']}\n"
@@ -188,7 +206,8 @@ async def generate_more_story(game_id: str, session_id: str, req: Dict[str, Any]
     prompt = prompts.GENERATE_STORY_PROMPT.format(
         target_label=target,
         context=context,
-        metadata=meta.model_dump_json(indent=2) if meta else "No metadata"
+        metadata=meta.model_dump_json(indent=2) if meta else "No metadata",
+        char_context=char_context
     )
     
     try:
@@ -205,6 +224,7 @@ async def continue_story(game_id: str, session_id: str):
     state = load_session(game_id, session_id)
     meta = load_metadata(game_id)
     
+    char_context = get_full_character_context(game_id, meta) if meta else ""
     next_label = f"cont_{state.current_label}_{int(time.time())}"
     context = ""
     for entry in state.dialogue_log[-10:]:
@@ -214,7 +234,8 @@ async def continue_story(game_id: str, session_id: str):
         current_label=state.current_label,
         next_label=next_label,
         context=context,
-        metadata=meta.model_dump_json(indent=2) if meta else "No metadata"
+        metadata=meta.model_dump_json(indent=2) if meta else "No metadata",
+        char_context=char_context
     )
     
     try:
@@ -253,6 +274,8 @@ async def step_game(game_id: str, session_id: str, update: GameUpdate):
 async def list_assets(game_id: str, category: str):
     p = get_game_path(game_id, "reference", category)
     if not os.path.exists(p): return {"assets": []}
+    if category == "characters":
+        return {"assets": [d for d in os.listdir(p) if os.path.isdir(os.path.join(p, d))]}
     return {"assets": [f.replace(".txt", "") for f in os.listdir(p) if f.endswith(".txt")]}
 
 @app.get("/games/{game_id}/assets/{category}/{asset_id}")
@@ -276,10 +299,108 @@ async def generate_asset(game_id: str, req: GenerateRequest):
         return {"status": "success", "content": content}
     except Exception as e: raise HTTPException(status_code=502, detail=str(e))
 
+@app.post("/games/{game_id}/assets/scan")
+async def scan_assets(game_id: str):
+    """
+    Automated asset discovery and scaffolding.
+    Scans the script for characters, backgrounds, and variables.
+    Creates missing reference files/folders and updates metadata.
+    """
+    meta = load_metadata(game_id)
+    if not meta: raise HTTPException(status_code=404, detail="Not found")
+    
+    from src.server.parser import NarratParser
+    parser = NarratParser(game_id)
+    detected = parser.detect_assets()
+    
+    newly_added = {"characters": [], "backgrounds": [], "scenes": [], "variables": []}
+    
+    # 1. Characters
+    for char in detected["characters"]:
+        p = get_game_path(game_id, "reference", "characters", char)
+        if not os.path.exists(p):
+            os.makedirs(p, exist_ok=True)
+            # Create default empty profile/desc if they don't exist
+            open(os.path.join(p, f"{char}_profile.txt"), "a").close()
+            open(os.path.join(p, f"{char}_description.txt"), "a").close()
+            newly_added["characters"].append(char)
+            if char not in meta.characters: meta.characters.append(char)
+            
+    # 2. Backgrounds
+    for bg in detected["backgrounds"]:
+        p = get_game_path(game_id, "reference", "backgrounds", f"{bg}.txt")
+        if not os.path.exists(p):
+            open(p, "a").close()
+            newly_added["backgrounds"].append(bg)
+            if bg not in meta.backgrounds: meta.backgrounds.append(bg)
+
+    # 3. Variables
+    for var in detected["variables"]:
+        p = get_game_path(game_id, "reference", "variables", f"{var}.txt")
+        if not os.path.exists(p):
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            open(p, "a").close()
+            newly_added["variables"].append(var)
+            if var not in meta.variables: meta.variables.append(var)
+
+    # 4. Scenes (Labels)
+    for scene in parser.labels.keys():
+        if scene not in meta.scenes:
+            meta.scenes.append(scene)
+            newly_added["scenes"].append(scene)
+
+    save_metadata(game_id, meta)
+    return {"status": "success", "added": newly_added}
+
+@app.delete("/games/{game_id}/assets/{category}/{asset_id}")
+async def delete_asset(game_id: str, category: str, asset_id: str):
+    meta = load_metadata(game_id)
+    if not meta: raise HTTPException(status_code=404, detail="Not found")
+    
+    from src.server.parser import NarratParser
+    parser = NarratParser(game_id)
+    detected = parser.detect_assets()
+    
+    # Check if in script
+    if category == "characters" and asset_id.lower() in detected["characters"]:
+        raise HTTPException(status_code=400, detail="Cannot delete character used in script")
+    elif category == "backgrounds" and asset_id.lower() in detected["backgrounds"]:
+        raise HTTPException(status_code=400, detail="Cannot delete background used in script")
+    elif category == "variables" and asset_id.lower() in detected["variables"]:
+        raise HTTPException(status_code=400, detail="Cannot delete variable used in script")
+    
+    # Delete from disk
+    if category == "characters":
+        p = get_game_path(game_id, "reference", "characters", asset_id)
+        if os.path.exists(p):
+            import shutil
+            shutil.rmtree(p)
+    else:
+        p = get_game_path(game_id, "reference", category, f"{asset_id}.txt")
+        if os.path.exists(p):
+            os.remove(p)
+            
+    # Update Metadata
+    if category == "characters":
+        meta.characters = [c for c in meta.characters if c.lower() != asset_id.lower()]
+    elif category == "backgrounds":
+        meta.backgrounds = [b for b in meta.backgrounds if b.lower() != asset_id.lower()]
+    elif category == "variables":
+        meta.variables = [v for v in meta.variables if v.lower() != asset_id.lower()]
+    elif category == "scenes":
+        meta.scenes = [s for s in meta.scenes if s != asset_id] # Scenes are labels, usually case-sensitive in metadata but lowercase in list
+        
+    save_metadata(game_id, meta)
+    return {"status": "success"}
+
 @app.post("/games/{game_id}/assets/rename")
 async def rename_asset(game_id: str, req: Dict[str, str]):
     cat, old_id, new_id = req.get("category"), req.get("old_id"), req.get("new_id")
     if not all([cat, old_id, new_id]): raise HTTPException(status_code=400, detail="Missing data")
+    
+    if cat == "characters":
+        new_id = new_id.lower().replace(" ", "_")
+        
     meta = load_metadata(game_id)
     if not meta: raise HTTPException(status_code=404, detail="Not found")
 
@@ -306,20 +427,30 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
     save_metadata(game_id, meta)
 
     # 2. Rename Files
+    old_p = None
     if cat == "characters":
-        old_p = get_game_path(game_id, "reference", "characters", old_id)
+        char_dir = get_game_path(game_id, "reference", "characters")
+        if os.path.exists(char_dir):
+            for d in os.listdir(char_dir):
+                if d.lower() == old_id.lower():
+                    old_p = os.path.join(char_dir, d); break
         new_p = get_game_path(game_id, "reference", "characters", new_id)
     else:
-        old_p = get_game_path(game_id, "reference", cat, f"{old_id}.txt")
+        ref_dir = get_game_path(game_id, "reference", cat)
+        if os.path.exists(ref_dir):
+            for f in os.listdir(ref_dir):
+                if f.lower() == f"{old_id.lower()}.txt":
+                    old_p = os.path.join(ref_dir, f); break
         new_p = get_game_path(game_id, "reference", cat, f"{new_id}.txt")
     
-    if os.path.exists(old_p):
+    if old_p and os.path.exists(old_p):
+        os.rename(old_p, new_p)
         if cat == "characters":
-            os.rename(old_p, new_p)
+            # Also rename files inside the character folder
             for f in os.listdir(new_p):
                 if old_id.lower() in f.lower():
-                    os.rename(os.path.join(new_p, f), os.path.join(new_p, f.lower().replace(old_id.lower(), new_id.lower())))
-        else: os.rename(old_p, new_p)
+                    new_f = f.lower().replace(old_id.lower(), new_id.lower())
+                    os.rename(os.path.join(new_p, f), os.path.join(new_p, new_f))
 
     # 3. Update Script
     sp = get_game_path(game_id, "phase1.narrat")
@@ -336,10 +467,17 @@ async def edit_game(game_id: str, session_id: str, update: Dict[str, Any]):
         sub = update.get("sub_category", "background")
         if sub == "character":
             p = get_game_path(game_id, "reference", "characters", target, f"{target}_{update.get('meta', {}).get('type', 'profile')}.txt")
+            # Ensure folder exists
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            # Initialize both files if they don't exist
+            prof_p = get_game_path(game_id, "reference", "characters", target, f"{target}_profile.txt")
+            desc_p = get_game_path(game_id, "reference", "characters", target, f"{target}_description.txt")
+            if not os.path.exists(prof_p): open(prof_p, "a").close()
+            if not os.path.exists(desc_p): open(desc_p, "a").close()
         else:
             p = get_game_path(game_id, "reference", f"{sub}s", f"{target}.txt")
+            os.makedirs(os.path.dirname(p), exist_ok=True)
         
-        os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, "w") as f: f.write(content)
     elif cat == "script":
         p = get_game_path(game_id, "phase1.narrat")
@@ -349,6 +487,14 @@ async def edit_game(game_id: str, session_id: str, update: Dict[str, Any]):
     elif cat == "metadata":
         meta = load_metadata(game_id)
         if meta: setattr(meta, target, content); save_metadata(game_id, meta)
+    
+    # Sync metadata characters if we just edited/created a character reference
+    if cat == "reference" and update.get("sub_category") == "character":
+        meta = load_metadata(game_id)
+        if meta and target not in meta.characters:
+            meta.characters.append(target)
+            save_metadata(game_id, meta)
+
     return {"status": "success"}
 
 @app.post("/games/{game_id}/sessions/{session_id}/edit/ai")
