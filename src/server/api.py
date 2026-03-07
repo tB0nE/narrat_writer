@@ -167,6 +167,13 @@ async def create_game(req: CreateGameRequest):
             os.makedirs(os.path.join(game_dir, "reference", "characters", char), exist_ok=True)
     
     os.makedirs(os.path.join(game_dir, "saves"), exist_ok=True)
+    
+    # Scaffold scripts directory
+    scripts_dir = os.path.join(game_dir, "scripts")
+    os.makedirs(scripts_dir, exist_ok=True)
+    for sub in ["chapters", "quests", "interactions"]:
+        os.makedirs(os.path.join(scripts_dir, sub), exist_ok=True)
+
     save_metadata(req.name, meta)
     
     if req.prompt:
@@ -178,7 +185,7 @@ async def create_game(req: CreateGameRequest):
         except: initial_script = f"{meta.starting_point}:\n    talk narrator \"Welcome to {meta.title}.\"\n"
     else: initial_script = f"{meta.starting_point}:\n    talk narrator \"Welcome to {meta.title}!\"\n"
 
-    with open(os.path.join(game_dir, "phase1.narrat"), "w") as f: f.write(initial_script)
+    with open(os.path.join(scripts_dir, "main.narrat"), "w") as f: f.write(initial_script)
     return {"status": "success", "game_id": req.name}
 
 def get_full_character_context(game_id: str, meta: GameMetadata) -> str:
@@ -195,6 +202,7 @@ def get_full_character_context(game_id: str, meta: GameMetadata) -> str:
 @app.post("/games/{game_id}/sessions/{session_id}/generate")
 async def generate_more_story(game_id: str, session_id: str, req: Dict[str, Any]):
     target = req.get("target")
+    rel_path = req.get("path", "main.narrat")
     state = load_session(game_id, session_id)
     meta = load_metadata(game_id)
     
@@ -214,13 +222,14 @@ async def generate_more_story(game_id: str, session_id: str, req: Dict[str, Any]
         new_script = call_llm(prompt, game_id=game_id)
         new_script = re.sub(r'^```[\w]*\s*\n?', '', new_script, flags=re.MULTILINE)
         new_script = re.sub(r'\n?```$', '', new_script, flags=re.MULTILINE)
-        p = get_game_path(game_id, "phase1.narrat")
+        p = get_script_path(game_id, rel_path)
         with open(p, "a") as f: f.write("\n\n" + new_script + "\n")
         return {"status": "success"}
     except Exception as e: raise HTTPException(status_code=502, detail=str(e))
 
 @app.post("/games/{game_id}/sessions/{session_id}/continue")
-async def continue_story(game_id: str, session_id: str):
+async def continue_story(game_id: str, session_id: str, req: Dict[str, Any] = None):
+    rel_path = (req or {}).get("path", "main.narrat")
     state = load_session(game_id, session_id)
     meta = load_metadata(game_id)
     
@@ -242,7 +251,7 @@ async def continue_story(game_id: str, session_id: str):
         new_script = call_llm(prompt, game_id=game_id)
         new_script = re.sub(r'^```[\w]*\s*\n?', '', new_script, flags=re.MULTILINE)
         new_script = re.sub(r'\n?```$', '', new_script, flags=re.MULTILINE)
-        p = get_game_path(game_id, "phase1.narrat")
+        p = get_script_path(game_id, rel_path)
         with open(p, "a") as f: f.write("\n\n" + new_script + "\n")
         
         # Point the state to the new label
@@ -270,6 +279,21 @@ async def step_game(game_id: str, session_id: str, update: GameUpdate):
             return await process_current_step(game_id, state, parser, "B_REPROCESS")
     return await process_current_step(game_id, state, parser, update.command)
 
+@app.get("/games/{game_id}/scripts/content")
+async def get_script_content(game_id: str, path: str):
+    p = get_script_path(game_id, path)
+    if not os.path.exists(p): raise HTTPException(status_code=404, detail="Script not found")
+    with open(p, "r") as f: return {"content": f.read()}
+
+@app.put("/games/{game_id}/scripts/content")
+async def update_script_content(game_id: str, req: Dict[str, str]):
+    path, content = req.get("path"), req.get("content")
+    if not path: raise HTTPException(status_code=400, detail="Missing path")
+    p = get_script_path(game_id, path)
+    if not os.path.exists(p): raise HTTPException(status_code=404, detail="Script not found")
+    with open(p, "w") as f: f.write(content)
+    return {"status": "success"}
+
 @app.get("/games/{game_id}/assets/{category}")
 async def list_assets(game_id: str, category: str):
     p = get_game_path(game_id, "reference", category)
@@ -282,6 +306,8 @@ async def list_assets(game_id: str, category: str):
 async def get_asset(game_id: str, category: str, asset_id: str, type: str = "description"):
     if category == "backgrounds": p = get_game_path(game_id, "reference", "backgrounds", f"{asset_id}.txt")
     elif category == "characters": p = get_game_path(game_id, "reference", "characters", asset_id, f"{asset_id}_{type}.txt")
+    elif category == "scenes": p = get_game_path(game_id, "reference", "scenes", f"{asset_id}.txt")
+    elif category == "variables": p = get_game_path(game_id, "reference", "variables", f"{asset_id}.txt")
     else: p = get_game_path(game_id, "reference", category, f"{asset_id}.txt")
     if not os.path.exists(p): return {"content": ""}
     with open(p, "r") as f: return {"content": f.read()}
@@ -452,12 +478,51 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
                     new_f = f.lower().replace(old_id.lower(), new_id.lower())
                     os.rename(os.path.join(new_p, f), os.path.join(new_p, new_f))
 
-    # 3. Update Script
-    sp = get_game_path(game_id, "phase1.narrat")
-    if os.path.exists(sp):
-        with open(sp, "r") as f: content = f.read()
-        with open(sp, "w") as f: f.write(apply_smart_rename(content, old_id, new_id))
+    # 3. Update Scripts
+    scripts_dir = get_game_path(game_id, "scripts")
+    if os.path.exists(scripts_dir):
+        for root, _, files in os.walk(scripts_dir):
+            for f in files:
+                if f.endswith(".narrat"):
+                    sp = os.path.join(root, f)
+                    with open(sp, "r") as file: content = file.read()
+                    with open(sp, "w") as file: file.write(apply_smart_rename(content, old_id, new_id))
 
+    return {"status": "success"}
+
+@app.get("/games/{game_id}/scripts")
+async def list_scripts(game_id: str):
+    scripts_dir = get_game_path(game_id, "scripts")
+    if not os.path.exists(scripts_dir): return {"scripts": []}
+    
+    scripts = []
+    for root, _, files in os.walk(scripts_dir):
+        for f in files:
+            if f.endswith(".narrat"):
+                full_p = os.path.join(root, f)
+                rel_p = os.path.relpath(full_p, scripts_dir)
+                scripts.append({
+                    "path": rel_p,
+                    "name": f.replace(".narrat", ""),
+                    "size": os.path.getsize(full_p)
+                })
+    return {"scripts": sorted(scripts, key=lambda x: x["path"])}
+
+@app.post("/games/{game_id}/scripts")
+async def create_script(game_id: str, req: Dict[str, str]):
+    path = req.get("path") # e.g. "chapters/chapter1.narrat"
+    if not path: raise HTTPException(status_code=400, detail="Missing path")
+    if not path.endswith(".narrat"): path += ".narrat"
+    
+    full_p = get_game_path(game_id, "scripts", path)
+    os.makedirs(os.path.dirname(full_p), exist_ok=True)
+    
+    if os.path.exists(full_p): raise HTTPException(status_code=400, detail="File already exists")
+    
+    # Scaffold with a basic label if it's empty
+    label_name = os.path.basename(path).replace(".narrat", "")
+    content = f"// New script: {path}\n\n{label_name}:\n    \"This is a new script.\"\n"
+    with open(full_p, "w") as f: f.write(content)
     return {"status": "success"}
 
 @app.post("/games/{game_id}/sessions/{session_id}/edit")
@@ -480,7 +545,8 @@ async def edit_game(game_id: str, session_id: str, update: Dict[str, Any]):
         
         with open(p, "w") as f: f.write(content)
     elif cat == "script":
-        p = get_game_path(game_id, "phase1.narrat")
+        rel_path = update.get("meta", {}).get("path", "main.narrat")
+        p = get_game_path(game_id, "scripts", rel_path)
         with open(p, "r") as f: lines = f.readlines()
         lines[int(target)] = f"{re.match(r'^\s*', lines[int(target)]).group(0)}{content}\n"
         with open(p, "w") as f: f.writelines(lines)
@@ -501,8 +567,9 @@ async def edit_game(game_id: str, session_id: str, update: Dict[str, Any]):
 async def edit_game_ai(game_id: str, session_id: str, update: Dict[str, Any]):
     target_idx = int(update.get("target"))
     instruction = update.get("content")
+    rel_path = update.get("meta", {}).get("path", "main.narrat")
     
-    p = get_game_path(game_id, "phase1.narrat")
+    p = get_game_path(game_id, "scripts", rel_path)
     with open(p, "r") as f: lines = f.readlines()
     
     old_line = lines[target_idx].strip()

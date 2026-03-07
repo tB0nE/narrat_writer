@@ -18,7 +18,7 @@ def test_character_global_rename(client):
     })
     
     # 2. Add a custom script
-    script_path = os.path.join("test_games_tmp", game_id, "phase1.narrat")
+    script_path = os.path.join("test_games_tmp", game_id, "scripts", "main.narrat")
     content = """main:
     talk sara "Hi, I am Sara."
     sara "Sara is my name."

@@ -28,7 +28,7 @@ class GameHub:
         while True:
             res = requests.get(f"{self.base_url}/games/{game_id}/metadata")
             meta = res.json()
-            options = ["Start New Game", "Load Game", "Edit Game Metadata", "Characters", "Backgrounds", "Scenes", "Variables", "Validate Script", "Back"]
+            options = ["Start New Game", "Load Game", "Edit Game Metadata", "Scripts", "Characters", "Backgrounds", "Scenes", "Variables", "Validate Script", "Back"]
             
             with Live(self.render_game_hub(options, 0, meta), screen=True, auto_refresh=False) as live:
                 idx = 0
@@ -62,6 +62,12 @@ class GameHub:
                             elif action_choice == "Load Game":
                                 self.save_manager_flow_shared(game_id, live, input_obj)
                                 break # Refresh
+                            
+                            elif action_choice == "Scripts":
+                                live.stop()
+                                self.script_manager_flow(game_id)
+                                live.start()
+                                break
                             
                             elif action_choice in ["Characters", "Backgrounds", "Scenes", "Variables"]:
                                 live.stop()
@@ -717,3 +723,119 @@ class GameHub:
 
                     except Exception as e:
                         live.stop(); console.print(f"[red]Error in Asset Flow: {e}[/red]"); time.sleep(2); live.start()
+
+    def script_manager_flow(self, game_id):
+        """Management interface for modular script files."""
+        input_obj = create_input()
+        state = {"main_idx": 0, "active_menu": [], "scripts": [], "mode": "view", "preview_content": ""}
+
+        def fetch_scripts():
+            res = requests.get(f"{self.base_url}/games/{game_id}/scripts")
+            return res.json().get("scripts", [])
+
+        def fetch_preview(path):
+            try:
+                # We reuse the same logic as assets for simple read
+                # Actually, let's just use a direct path read if possible or add endpoint
+                # For now, let's assume we can fetch via a generic endpoint
+                # But since we haven't added GET /scripts/{path} yet, let's just show path info
+                for s in state["scripts"]:
+                    if s["path"] == path:
+                        return f"[bold cyan]Path:[/bold cyan] {s['path']}\n[bold cyan]Size:[/bold cyan] {s['size']} bytes\n\n[dim]Press Enter to edit this file in your external editor.[/dim]"
+                return "No info"
+            except: return "Error fetching preview"
+
+        def render_scripts(state):
+            layout = make_intro_layout()
+            
+            # Left Panel: Preview
+            if state["mode"] == "preview" and state.get("selected_path"):
+                info = fetch_preview(state["selected_path"])
+                layout["left"].update(Panel(Align.left(info, vertical="middle"), title="Script Info", border_style="cyan", padding=(1, 3)))
+            else:
+                info = "[bold cyan]Script Manager[/bold cyan]\n\nSelect a script file on the right to view its details or edit it.\n\n"
+                info += f"[bold white]Total Scripts:[/bold white] {len(state['scripts'])}\n"
+                layout["left"].update(Panel(Align.center(info, vertical="middle"), title="Overview", border_style="cyan"))
+
+            # Right Panel: Menu
+            menu_text = ""
+            for i, opt in enumerate(state["active_menu"]):
+                if i == state["main_idx"]: menu_text += f"> [bold yellow]{opt}[/bold yellow]\n"
+                else: menu_text += f"  {opt}\n"
+            layout["right"].update(Panel(Align.center(menu_text, vertical="middle"), title="Scripts", border_style="yellow"))
+            return layout
+
+        state["scripts"] = fetch_scripts()
+        state["active_menu"] = ["Add New"] + [s["path"] for s in state["scripts"]] + ["Back"]
+
+        with Live(render_scripts(state), screen=True, auto_refresh=False) as live:
+            with input_obj.raw_mode():
+                while True:
+                    live.update(render_scripts(state)); live.refresh()
+                    keys = input_obj.read_keys()
+                    if not keys:
+                        time.sleep(0.05); continue
+                    
+                    for key in keys:
+                        if key.key == Keys.Up: 
+                            state["main_idx"] = (state["main_idx"] - 1) % len(state["active_menu"])
+                            choice = state["active_menu"][state["main_idx"]]
+                            if choice not in ["Add New", "Back"]:
+                                state["mode"] = "preview"; state["selected_path"] = choice
+                            else:
+                                state["mode"] = "view"
+                        elif key.key == Keys.Down:
+                            state["main_idx"] = (state["main_idx"] + 1) % len(state["active_menu"])
+                            choice = state["active_menu"][state["main_idx"]]
+                            if choice not in ["Add New", "Back"]:
+                                state["mode"] = "preview"; state["selected_path"] = choice
+                            else:
+                                state["mode"] = "view"
+                        elif key.key == Keys.Enter or key.key == Keys.ControlM:
+                            choice = state["active_menu"][state["main_idx"]]
+                            if choice == "Back": return
+                            elif choice == "Add New":
+                                live.stop(); console.clear()
+                                stype = questionary.select("Script Type", choices=["chapter", "quest", "interaction", "other"]).ask()
+                                if stype:
+                                    sid = questionary.text("Script Name (e.g. intro)").ask()
+                                    if sid:
+                                        path = f"{stype}s/{sid}.narrat" if stype != "other" else f"{sid}.narrat"
+                                        requests.post(f"{self.base_url}/games/{game_id}/scripts", json={"path": path})
+                                        state["scripts"] = fetch_scripts()
+                                        state["active_menu"] = ["Add New"] + [s["path"] for s in state["scripts"]] + ["Back"]
+                                        state["main_idx"] = 0
+                                live.start()
+                            else:
+                                # Edit existing script
+                                res_config = requests.get(f"{self.base_url}/config")
+                                editor = res_config.json().get("editor")
+                                if not editor or editor == "None":
+                                    live.stop(); console.print("[red]No external editor configured in Options![/red]"); time.sleep(2); live.start()
+                                    continue
+                                
+                                live.stop(); console.clear()
+                                console.print(f"[yellow]Opening {editor} for {choice}...[/yellow]")
+                                
+                                # Fetch content
+                                try:
+                                    res = requests.get(f"{self.base_url}/games/{game_id}/scripts/content", params={"path": choice})
+                                    if res.status_code == 200:
+                                        content = res.json().get("content", "")
+                                        from src.terminal_client.utils import edit_text_in_external_editor
+                                        new_content = edit_text_in_external_editor(content)
+                                        
+                                        if new_content is not None and new_content != content:
+                                            # Save update
+                                            requests.put(f"{self.base_url}/games/{game_id}/scripts/content", json={"path": choice, "content": new_content})
+                                            state["scripts"] = fetch_scripts() # Refresh metadata
+                                    else:
+                                        console.print(f"[red]Error fetching script: {res.text}[/red]")
+                                        time.sleep(2)
+                                except Exception as e:
+                                    console.print(f"[red]Error editing script: {e}[/red]")
+                                    time.sleep(2)
+                                
+                                live.start()
+                        elif key.key == Keys.Escape: return
+

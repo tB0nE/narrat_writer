@@ -9,7 +9,7 @@ def edit_game(client):
 
 def test_script_surgical_update(client, edit_game):
     # Find the first talk line
-    path = os.path.join("test_games_tmp", edit_game, "phase1.narrat")
+    path = os.path.join("test_games_tmp", edit_game, "scripts", "main.narrat")
     with open(path, "r") as f: lines = f.readlines()
     target_idx = next(i for i, l in enumerate(lines) if "talk" in l)
     
@@ -20,7 +20,7 @@ def test_script_surgical_update(client, edit_game):
     assert "Changed line" in res.json()["text"]
 
 def test_script_surgical_insert(client, edit_game):
-    path = os.path.join("test_games_tmp", edit_game, "phase1.narrat")
+    path = os.path.join("test_games_tmp", edit_game, "scripts", "main.narrat")
     with open(path, "r") as f: lines = f.readlines()
     target_idx = next(i for i, l in enumerate(lines) if "talk" in l)
 
