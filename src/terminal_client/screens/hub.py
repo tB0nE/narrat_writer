@@ -580,8 +580,24 @@ class GameHub:
                                         if new_id:
                                             if state["category"].lower() == "characters":
                                                 new_id = new_id.lower().replace(" ", "_")
+                                            
+                                            # Create on server
+                                            requests.post(f"{self.base_url}/games/{game_id}/sessions/any/edit", json={
+                                                "category": "reference", 
+                                                "action": "update", 
+                                                "sub_category": state["category"].lower()[:-1], 
+                                                "target": new_id, 
+                                                "content": ""
+                                            })
+                                            
                                             state["asset_id"] = new_id; state["asset_id_preview"] = new_id
-                                            state["active_menu"] = ["Rename", "Edit Description", "Edit Profile", "AI Generate Description", "Back"]
+                                            
+                                            if state["category"].lower() == "characters":
+                                                actions = ["Rename", "Edit Description", "Edit Profile", "AI Generate Description", "Delete", "Back"]
+                                            else:
+                                                actions = ["Rename", "Edit Description", "AI Generate Description", "Delete", "Back"]
+                                            
+                                            state["active_menu"] = actions
                                             state["main_idx"] = 0; state["mode"] = "preview"; state["asset_content"] = ""
                                         live.start()
                                     elif choice == "Scan":

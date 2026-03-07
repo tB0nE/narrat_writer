@@ -467,10 +467,17 @@ async def edit_game(game_id: str, session_id: str, update: Dict[str, Any]):
         sub = update.get("sub_category", "background")
         if sub == "character":
             p = get_game_path(game_id, "reference", "characters", target, f"{target}_{update.get('meta', {}).get('type', 'profile')}.txt")
+            # Ensure folder exists
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            # Initialize both files if they don't exist
+            prof_p = get_game_path(game_id, "reference", "characters", target, f"{target}_profile.txt")
+            desc_p = get_game_path(game_id, "reference", "characters", target, f"{target}_description.txt")
+            if not os.path.exists(prof_p): open(prof_p, "a").close()
+            if not os.path.exists(desc_p): open(desc_p, "a").close()
         else:
             p = get_game_path(game_id, "reference", f"{sub}s", f"{target}.txt")
+            os.makedirs(os.path.dirname(p), exist_ok=True)
         
-        os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, "w") as f: f.write(content)
     elif cat == "script":
         p = get_game_path(game_id, "phase1.narrat")
