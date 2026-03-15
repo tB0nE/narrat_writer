@@ -15,8 +15,8 @@ def get_script_path(game_id: str, relative_path: str):
     """Helper to get path to a script file within the scripts directory."""
     return get_game_path(game_id, "scripts", relative_path)
 
-def load_metadata(game_id: str) -> Optional[GameMetadata]:
-    """Loads metadata for a specific game, syncing with folders and script assets."""
+def load_metadata(game_id: str, sync: bool = False) -> Optional[GameMetadata]:
+    """Loads metadata for a specific game, optionally syncing with folders and script assets."""
     # Migration Check: Move phase1.narrat to scripts/main.narrat
     legacy_p = get_game_path(game_id, "phase1.narrat")
     scripts_dir = get_game_path(game_id, "scripts")
@@ -39,6 +39,9 @@ def load_metadata(game_id: str) -> Optional[GameMetadata]:
         with open(path, "r") as f:
             meta = GameMetadata(**json.load(f))
         
+        if not sync:
+            return meta
+
         from src.server.parser import NarratParser
         parser = NarratParser(game_id)
         detected = parser.detect_assets()

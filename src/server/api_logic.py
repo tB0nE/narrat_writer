@@ -1,6 +1,7 @@
 import re
 import json
 import logging
+import asyncio
 from typing import TYPE_CHECKING, Dict, List, Optional, Any
 from src.server.models import DialogueResponse, SessionState
 from src.server.utils import get_reference, save_session
@@ -20,16 +21,24 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
     
     # 1. Handle Choice selection if command is numeric
     if command and command.strip().isdigit():
-        # Choice selection always happens when we are already AT a choice block.
-        # However, we incremented the index by 1 when we returned the choice response.
-        # So the actual 'choice:' line is at state.line_index - 1
+        # The 'choice:' line is at state.line_index - 1
         line_data = parser.get_line(state.current_label, state.line_index - 1)
         if line_data and line_data[1].strip() == "choice:":
-            options = parse_choice_options(parser, state.current_label, state.line_index)
+            options, _, end_idx = parse_choice_options(parser, state.current_label, state.line_index)
             if command.strip() in options:
-                state.current_label, state.line_index = options[command.strip()]["target"], 0
-                logger.info(f"Choice selected: {command} -> {state.current_label}")
-                # After a choice jump, we fall through to the main execution loop
+                opt = options[command.strip()]
+                # Store where to jump AFTER the choice block finishes
+                state.variables["__choice_end_index"] = end_idx
+                
+                if "target_line" in opt:
+                    state.current_label, state.line_index = opt["target"], opt["target_line"]
+                else:
+                    state.current_label, state.line_index = opt["target"], 0
+                    # If we jumped to a NEW label, we lose the choice_end_index context for that label
+                    if opt["target"] != state.current_label:
+                        state.variables.pop("__choice_end_index", None)
+                
+                logger.info(f"Choice selected: {command} -> {state.current_label} @ {state.line_index}")
             else:
                 logger.warning(f"Invalid choice index: {command}")
 
@@ -40,18 +49,36 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
         line_data = parser.get_line(state.current_label, state.line_index)
         
         if line_data is None:
+            # Check if we were in a choice block and need to return
+            if "__choice_end_index" in state.variables:
+                state.line_index = state.variables.pop("__choice_end_index")
+                continue
+
             if state.current_label not in parser.labels:
                 return DialogueResponse(type="missing_label", meta={"target": state.current_label}, text=f"Label '{state.current_label}' missing.", variables=state.variables, dialogue_log=state.dialogue_log)
             return DialogueResponse(type="end", text="End of script.", variables=state.variables, dialogue_log=state.dialogue_log)
 
         line_num, line_text = line_data
         stripped = line_text.strip()
+        indent = len(line_text) - len(line_text.lstrip())
+
+        # If we reached a line with less or equal indent than the choice option we were executing,
+        # and we have a choice_end_index, it means we finished the option block.
+        if "__choice_end_index" in state.variables:
+             # This is a bit simplistic, but usually options are indented.
+             # If we are NOT indented relative to the choice: line, we might have finished.
+             # However, the loop below handles skipping other options.
+             pass
 
         if not stripped or stripped.startswith("//"):
             state.line_index += 1; continue
 
-        # --- A. NON-BLOCKING COMMANDS (Update state and continue) ---
+        # --- A. NON-BLOCKING COMMANDS ---
         
+        if stripped == "clear_dialog":
+            state.dialogue_log = []
+            state.line_index += 1; continue
+
         if re.match(r'^background\s+([\w_]+)', stripped):
             state.variables["__current_bg"] = re.match(r'^background\s+([\w_]+)', stripped).group(1)
             state.line_index += 1; continue
@@ -66,16 +93,14 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
             state.variables[f"__emo_{char}"] = emo
             state.line_index += 1; continue
 
-        if re.match(r'^set\s+([\w_.]+)\s+(.*)$', stripped):
-            m = re.match(r'^set\s+([\w_.]+)\s+(.*)$', stripped)
+        if re.match(r'^(?:set|var)\s+([\w_.]+)\s+(.*)$', stripped):
+            m = re.match(r'^(?:set|var)\s+([\w_.]+)\s+(.*)$', stripped)
             var_path, val_str = m.group(1), m.group(2).strip()
-            # Basic parsing
             if val_str.isdigit(): val = int(val_str)
             elif val_str.lower() == "true": val = True
             elif val_str.lower() == "false": val = False
             else: val = val_str.strip('"').strip("'")
             
-            # Nested update
             clean_path = var_path[5:] if var_path.startswith("data.") else var_path
             path_parts = clean_path.split(".")
             curr = state.variables
@@ -83,16 +108,49 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
                 if p not in curr or not isinstance(curr[p], dict): curr[p] = {}
                 curr = curr[p]
             curr[path_parts[-1]] = val
-            
+
             # Tracking
             if "__updated_vars" not in state.variables: state.variables["__updated_vars"] = []
-            if var_path not in state.variables["__updated_vars"]: state.variables["__updated_vars"].append(var_path)
-            if len(state.variables["__updated_vars"]) > 10: state.variables["__updated_vars"].pop(0)
+            if var_path not in state.variables["__updated_vars"]: 
+                state.variables["__updated_vars"].append(var_path)
+            if len(state.variables["__updated_vars"]) > 10: 
+                state.variables["__updated_vars"].pop(0)
+
+            state.line_index += 1; continue
+
+        if re.match(r'^add\s+([\w_.]+)\s+(.*)$', stripped):
+            m = re.match(r'^add\s+([\w_.]+)\s+(.*)$', stripped)
+            var_path, val_str = m.group(1), m.group(2).strip()
+            # Try to evaluate or parse the value to add
+            try:
+                val = int(val_str)
+            except:
+                val = evaluate_expression(val_str, state.variables)
+            
+            clean_path = var_path[5:] if var_path.startswith("data.") else var_path
+            path_parts = clean_path.split(".")
+            curr = state.variables
+            for p in path_parts[:-1]:
+                if p not in curr or not isinstance(curr[p], dict): curr[p] = {}
+                curr = curr[p]
+            
+            old_val = curr.get(path_parts[-1], 0)
+            if isinstance(old_val, (int, float)) and isinstance(val, (int, float)):
+                curr[path_parts[-1]] = old_val + val
+
+            # Tracking
+            if "__updated_vars" not in state.variables: state.variables["__updated_vars"] = []
+            if var_path not in state.variables["__updated_vars"]: 
+                state.variables["__updated_vars"].append(var_path)
+            if len(state.variables["__updated_vars"]) > 10: 
+                state.variables["__updated_vars"].pop(0)
+
             state.line_index += 1; continue
 
         if re.match(r'^(?:jump|->)\s+([\w_]+)', stripped):
             target = re.match(r'^(?:jump|->)\s+([\w_]+)', stripped).group(1)
             state.current_label, state.line_index = target, 0
+            state.variables.pop("__choice_end_index", None) # Jump breaks choice block
             continue
 
         if re.match(r'^if\s+(.*):$', stripped):
@@ -100,8 +158,7 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
             if evaluate_expression(expr, state.variables):
                 state.line_index += 1
             else:
-                # Skip block
-                base_indent = len(line_text) - len(line_text.lstrip())
+                base_indent = indent
                 state.line_index += 1
                 while True:
                     nxt = parser.get_line(state.current_label, state.line_index)
@@ -111,31 +168,60 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
                     state.line_index += 1
             continue
 
-        # --- B. BLOCKING COMMANDS (Update state and return) ---
+        if re.match(r'^roll\s+([\w_.]+)\s+([\w_.]+)\s+(\d+)', stripped):
+            m = re.match(r'^roll\s+([\w_.]+)\s+([\w_.]+)\s+(\d+)', stripped)
+            roll_id, stat_id, threshold = m.group(1), m.group(2), int(m.group(3))
+            
+            # Simple dice roll for now
+            import random
+            roll_val = random.randint(1, 100)
+            success = roll_val >= threshold
+            
+            # Tracking
+            if "__updated_vars" not in state.variables: state.variables["__updated_vars"] = []
+            if roll_id not in state.variables["__updated_vars"]: 
+                state.variables["__updated_vars"].append(roll_id)
+            if len(state.variables["__updated_vars"]) > 10: 
+                state.variables["__updated_vars"].pop(0)
+
+            # Store result for subsequent 'if' block
+            state.variables[roll_id] = success
+            state.line_index += 1; continue
+
+        if re.match(r'^wait\s+(\d+)', stripped):
+            ms = int(re.match(r'^wait\s+(\d+)', stripped).group(1))
+            await asyncio.sleep(ms / 1000.0)
+            state.line_index += 1; continue
+
+        # --- B. BLOCKING COMMANDS ---
 
         if stripped == "choice:":
-            options = parse_choice_options(parser, state.current_label, state.line_index + 1)
-            # Increment index so we sit ON the choice block for selection
+            options, prompt_text, end_idx = parse_choice_options(parser, state.current_label, state.line_index + 1)
             res_idx = state.line_index
             state.line_index += 1
             save_and_log_state(game_id, state)
-            return build_response(game_id, state, "choice", options=options, line_index=res_idx)
+            return build_response(game_id, state, "choice", options=options, text=prompt_text or None, line_index=res_idx)
 
         # Dialogue match
         char, text = match_dialogue(stripped)
         if char:
             res_idx = state.line_index
-            # We ALWAYS increment the index for the next step, 
-            # regardless of whether we are reprocessing or not.
             state.line_index += 1
-            
             state.dialogue_log.append({"character": char, "text": text})
             if len(state.dialogue_log) > 20: state.dialogue_log.pop(0)
             save_and_log_state(game_id, state)
             return build_response(game_id, state, "talk", character=char, text=text, line_index=res_idx)
 
+        # If we haven't matched anything and we have a choice_end_index, 
+        # check if we just hit another option (which means we should skip to the end)
+        if "__choice_end_index" in state.variables:
+             # If this line is an option line at the same indent as the choice block's options,
+             # it means we finished our selected option and are hitting the next one.
+             # We should skip to the end of the choice block.
+             state.line_index = state.variables.pop("__choice_end_index")
+             continue
+
         # Unrecognized - skip
-        logger.warning(f"Unknown line: {stripped}")
         state.line_index += 1
 
     return DialogueResponse(type="end", text="Safety limit.")
@@ -144,34 +230,96 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
 
 def parse_choice_options(parser, label, start_idx):
     options, opt_idx, temp_idx = {}, 1, start_idx
+    prompt_text = []
+    
+    line_data = parser.get_line(label, start_idx - 1)
+    choice_indent = len(line_data[1]) - len(line_data[1].lstrip()) if line_data else 0
+
+    # 1. Collect leading text
     while True:
         nxt = parser.get_line(label, temp_idx)
         if not nxt: break
-        txt = nxt[1].strip()
-        if not txt or txt.startswith("//"): temp_idx += 1; continue
-        opt_m = re.match(r'^\s*"(.*)":\s*(?://.*)?$', nxt[1])
-        if opt_m:
-            label_text = opt_m.group(1)
-            s_idx, target_lbl = temp_idx + 1, None
-            while True:
-                j_data = parser.get_line(label, s_idx)
-                if not j_data: break
-                jc = j_data[1].strip()
-                if not jc or jc.startswith("//"): s_idx += 1; continue
-                if re.match(r'^\s*"(.*)":', j_data[1]): break # Next option
-                m = re.search(r'(?:jump|->)\s+([\w_]+)', jc)
-                if m: target_lbl = m.group(1); break
-                s_idx += 1
-            if target_lbl:
-                options[str(opt_idx)] = {"text": label_text, "target": target_lbl}
-                opt_idx += 1; temp_idx = s_idx + 1; continue
-        break
-    return options
+        raw = nxt[1]
+        txt = raw.strip()
+        if not txt or txt.startswith("//"): 
+            temp_idx += 1; continue
+        
+        if re.match(r'^\s*"(.*)"\s*(?:if\s+.*)?:\s*(?://.*)?$', raw):
+            break
+        
+        char, text = match_dialogue(txt)
+        if char:
+            prompt_text.append(f"{char}: {text}" if char != "narrator" else text)
+        temp_idx += 1
+
+    # 2. Collect options
+    first_opt_idx = temp_idx
+    while True:
+        nxt = parser.get_line(label, temp_idx)
+        if not nxt: break
+        raw = nxt[1]
+        txt = raw.strip()
+        if not txt or txt.startswith("//"): 
+            temp_idx += 1; continue
+            
+        opt_match = re.match(r'^\s*"(.*)"\s*(?:if\s+(.*))?:\s*(?://.*)?$', raw)
+        if not opt_match: break
+            
+        label_text = opt_match.group(1)
+        condition = opt_match.group(2)
+        
+        # Strip trailing colon from condition if it exists (captured by regex)
+        if condition:
+            condition = condition.strip().rstrip(":")
+            if not evaluate_expression(condition, state.variables):
+                # Skip this option
+                base_indent = len(raw) - len(raw.lstrip())
+                temp_idx += 1
+                while True:
+                    n_data = parser.get_line(label, temp_idx)
+                    if not n_data: break
+                    if not n_data[1].strip(): temp_idx += 1; continue
+                    if (len(n_data[1]) - len(n_data[1].lstrip())) <= base_indent: break
+                    temp_idx += 1
+                continue
+
+        base_indent = len(raw) - len(raw.lstrip())
+        
+        s_idx, target_lbl = temp_idx + 1, None
+        while True:
+            j_data = parser.get_line(label, s_idx)
+            if not j_data: break
+            jc = j_data[1].strip()
+            if not jc or jc.startswith("//"): s_idx += 1; continue
+            if (len(j_data[1]) - len(j_data[1].lstrip())) <= base_indent: break
+            
+            m = re.search(r'(?:jump|->)\s+([\w_]+)', jc)
+            if m: target_lbl = m.group(1); break
+            s_idx += 1
+            
+        if target_lbl:
+            options[str(opt_idx)] = {"text": label_text, "target": target_lbl}
+        else:
+            options[str(opt_idx)] = {"text": label_text, "target": label, "target_line": temp_idx + 1}
+
+        opt_idx += 1
+        temp_idx += 1
+        # Skip option block
+        while True:
+            n_data = parser.get_line(label, temp_idx)
+            if not n_data: break
+            if not n_data[1].strip(): temp_idx += 1; continue
+            if (len(n_data[1]) - len(n_data[1].lstrip())) <= base_indent: break
+            temp_idx += 1
+                
+    return options, "\n".join(prompt_text), temp_idx
+
+
 
 def match_dialogue(stripped):
     # talk char "text"
     m = re.match(r'^(?:talk\s+)?([\w_]+)(?:\s+[\w_]+)?\s+"(.*)"$', stripped)
-    if m and m.group(1) not in ["background", "scene", "jump", "set", "set_expression", "choice", "if", "var"]:
+    if m and m.group(1) not in ["background", "scene", "jump", "set", "set_expression", "choice", "if", "var", "wait", "add", "clear_dialog"]:
         return m.group(1), m.group(2)
     # "text" (implicit narrate)
     m = re.match(r'^"(.*)"$', stripped)
@@ -179,7 +327,9 @@ def match_dialogue(stripped):
     return None, None
 
 def save_and_log_state(game_id, state):
-    state.history.append(json.loads(state.model_dump_json()))
+    # Snapshot WITHOUT history to prevent exponential growth
+    snapshot = state.model_dump(exclude={"history"})
+    state.history.append(snapshot)
     if len(state.history) > 50: state.history.pop(0)
     save_session(game_id, state)
 

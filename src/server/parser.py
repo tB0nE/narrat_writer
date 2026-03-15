@@ -7,14 +7,31 @@ logger = logging.getLogger("narrat_api")
 
 from src.server.expressions import evaluate_expression
 
+_parser_cache = {}
+
 class NarratParser:
+    def __new__(cls, game_id: str):
+        if game_id in _parser_cache:
+            return _parser_cache[game_id]
+        instance = super(NarratParser, cls).__new__(cls)
+        _parser_cache[game_id] = instance
+        return instance
+
     def __init__(self, game_id: str):
+        if hasattr(self, "_initialized"): return
         from src.server.utils import get_game_path
         self.game_id = game_id
         self.scripts_dir = get_game_path(game_id, "scripts")
         
         self.labels = {} # label_name -> list of (line_num, line_text)
         self.label_to_file = {} # label_name -> relative_file_path
+        self.errors = []
+        self.parse_all()
+        self._initialized = True
+
+    def refresh(self):
+        self.labels = {}
+        self.label_to_file = {}
         self.errors = []
         self.parse_all()
 
@@ -47,7 +64,7 @@ class NarratParser:
             "run", "return", "if", "else", "background", "scene", 
             "play", "pause", "stop", "add", "add_item", "remove_item",
             "start_quest", "complete_quest", "add_level", "roll", 
-            "add_stat", "set_stat", "set_screen", "random"
+            "add_stat", "set_stat", "set_screen", "random", "wait"
         ]
 
         for i, line in enumerate(lines):
@@ -102,7 +119,7 @@ class NarratParser:
             "run", "return", "if", "else", "background", "scene", 
             "play", "pause", "stop", "add", "add_item", "remove_item",
             "start_quest", "complete_quest", "add_level", "roll", 
-            "add_stat", "set_stat", "set_screen", "random"
+            "add_stat", "set_stat", "set_screen", "random", "wait"
         ]
 
         # Scan all .narrat files

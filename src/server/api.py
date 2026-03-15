@@ -116,7 +116,7 @@ async def list_games():
     games = []
     for d in os.listdir(games_dir):
         if os.path.isdir(os.path.join(games_dir, d)):
-            meta = load_metadata(d)
+            meta = load_metadata(d, sync=True)
             if meta: 
                 games.append({"id": d, "title": meta.title, "summary": meta.summary, "genre": meta.genre, "characters": meta.characters, "plot_outline": meta.plot_outline})
     return {"games": games}
@@ -143,7 +143,7 @@ async def get_game_label_map(game_id: str):
 
 @app.get("/games/{game_id}/metadata")
 async def get_game_metadata(game_id: str):
-    meta = load_metadata(game_id)
+    meta = load_metadata(game_id, sync=True)
     if meta: return meta
     raise HTTPException(status_code=404, detail="Game not found")
 
@@ -213,7 +213,7 @@ async def generate_more_story(game_id: str, session_id: str, req: Dict[str, Any]
     # Resolve which file to append to. Default to main.narrat if target is new or unknown
     rel_path = req.get("path") or parser.label_to_file.get(target) or "main.narrat"
     state = load_session(game_id, session_id)
-    meta = load_metadata(game_id)
+    meta = load_metadata(game_id, sync=True)
     
     char_context = get_full_character_context(game_id, meta) if meta else ""
     context = ""
@@ -241,7 +241,7 @@ async def continue_story(game_id: str, session_id: str, req: Dict[str, Any] = No
     state = load_session(game_id, session_id)
     parser = NarratParser(game_id)
     rel_path = (req or {}).get("path") or parser.label_to_file.get(state.current_label) or "main.narrat"
-    meta = load_metadata(game_id)
+    meta = load_metadata(game_id, sync=True)
     
     char_context = get_full_character_context(game_id, meta) if meta else ""
     next_label = f"cont_{state.current_label}_{int(time.time())}"
@@ -302,6 +302,7 @@ async def update_script_content(game_id: str, req: Dict[str, str]):
     p = get_script_path(game_id, path)
     if not os.path.exists(p): raise HTTPException(status_code=404, detail="Script not found")
     with open(p, "w") as f: f.write(content)
+    NarratParser(game_id).refresh()
     return {"status": "success"}
 
 @app.delete("/games/{game_id}/scripts/content")
@@ -310,6 +311,7 @@ async def delete_script(game_id: str, path: str):
     p = get_script_path(game_id, path)
     if not os.path.exists(p): raise HTTPException(status_code=404, detail="Script not found")
     os.remove(p)
+    NarratParser(game_id).refresh()
     return {"status": "success"}
 
 @app.get("/games/{game_id}/assets/{category}")
@@ -333,7 +335,7 @@ async def get_asset(game_id: str, category: str, asset_id: str, type: str = "des
 @app.post("/games/{game_id}/assets/generate")
 async def generate_asset(game_id: str, req: GenerateRequest):
     target, cat, sub = req.target, req.category, req.sub_type
-    meta = load_metadata(game_id)
+    meta = load_metadata(game_id, sync=True)
     prompt = prompts.ASSET_DESCRIPTION_PROMPT.format(asset_id=target, asset_type=f"{cat} {sub}", metadata=meta.model_dump_json(indent=2) if meta else "No metadata")
     try:
         content = call_llm(prompt, game_id=game_id)
@@ -350,7 +352,7 @@ async def scan_assets(game_id: str):
     Scans the script for characters, backgrounds, and variables.
     Creates missing reference files/folders and updates metadata.
     """
-    meta = load_metadata(game_id)
+    meta = load_metadata(game_id, sync=True)
     if not meta: raise HTTPException(status_code=404, detail="Not found")
     
     from src.server.parser import NarratParser
@@ -398,7 +400,7 @@ async def scan_assets(game_id: str):
 
 @app.delete("/games/{game_id}/assets/{category}/{asset_id}")
 async def delete_asset(game_id: str, category: str, asset_id: str):
-    meta = load_metadata(game_id)
+    meta = load_metadata(game_id, sync=True)
     if not meta: raise HTTPException(status_code=404, detail="Not found")
     
     from src.server.parser import NarratParser
@@ -445,7 +447,7 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
     if cat == "characters":
         new_id = new_id.lower().replace(" ", "_")
         
-    meta = load_metadata(game_id)
+    meta = load_metadata(game_id, sync=True)
     if not meta: raise HTTPException(status_code=404, detail="Not found")
 
     def apply_smart_rename(text, old, new):
@@ -574,12 +576,12 @@ async def edit_game(game_id: str, session_id: str, update: Dict[str, Any]):
         lines[int(target)] = f"{re.match(r'^\s*', lines[int(target)]).group(0)}{content}\n"
         with open(p, "w") as f: f.writelines(lines)
     elif cat == "metadata":
-        meta = load_metadata(game_id)
+        meta = load_metadata(game_id, sync=True)
         if meta: setattr(meta, target, content); save_metadata(game_id, meta)
     
     # Sync metadata characters if we just edited/created a character reference
     if cat == "reference" and update.get("sub_category") == "character":
-        meta = load_metadata(game_id)
+        meta = load_metadata(game_id, sync=True)
         if meta and target not in meta.characters:
             meta.characters.append(target)
             save_metadata(game_id, meta)
@@ -600,7 +602,7 @@ async def edit_game_ai(game_id: str, session_id: str, update: Dict[str, Any]):
     with open(p, "r") as f: lines = f.readlines()
     
     old_line = lines[target_idx].strip()
-    meta = load_metadata(game_id)
+    meta = load_metadata(game_id, sync=True)
     
     prompt = f"Original line: {old_line}\nInstruction: {instruction}\nContext: {meta.model_dump_json() if meta else ''}\nRewrite the line using valid narrat syntax. Return ONLY the line."
     new_content = call_llm(prompt, game_id=game_id).strip()
@@ -615,7 +617,7 @@ async def edit_game_ai(game_id: str, session_id: str, update: Dict[str, Any]):
 @app.post("/games/{game_id}/refine/options")
 async def refine_metadata_options(game_id: str, req: Dict[str, str]):
     field, instruction = req.get("field"), req.get("instruction", "Better")
-    current_meta = load_metadata(game_id)
+    current_meta = load_metadata(game_id, sync=True)
     prompt = prompts.METADATA_REFINE_PROMPT.format(field=field, instruction=instruction, metadata=current_meta.model_dump_json(indent=2))
     try:
         raw = call_llm(prompt, game_id=game_id)
@@ -626,7 +628,7 @@ async def refine_metadata_options(game_id: str, req: Dict[str, str]):
 
 @app.post("/games/{game_id}/regenerate")
 async def regenerate_metadata(game_id: str, req: CreateGameRequest):
-    current_meta = load_metadata(game_id)
+    current_meta = load_metadata(game_id, sync=True)
     prompt = prompts.REGENERATE_METADATA_PROMPT.format(user_prompt=req.prompt or "Refine", current_metadata=current_meta.model_dump_json(indent=2))
     try:
         raw = call_llm(prompt, game_id=game_id)

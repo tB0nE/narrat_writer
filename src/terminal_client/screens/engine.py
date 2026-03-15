@@ -11,7 +11,7 @@ from rich.text import Text
 from rich.align import Align
 from prompt_toolkit.input import create_input
 from prompt_toolkit.keys import Keys
-from src.terminal_client.utils import console, BASE_URL, open_in_external_editor
+from src.terminal_client.utils import console, BASE_URL, open_in_external_editor, process_spans
 
 class GameEngine:
     def __init__(self, game_id, session_id, custom_console=None, base_url=None):
@@ -62,7 +62,7 @@ class GameEngine:
         if not options: return "[dim]No options available.[/dim]"
         # options is a dict { "1": {"text": "...", "target": "..."}, ... }
         for i, (key, opt) in enumerate(options.items()):
-            text = opt['text']
+            text = process_spans(opt['text'])
             if self.focus == "choices" and i == self.choice_idx: 
                 lines.append(f"> [bold black on yellow] {text} [/bold black on yellow]")
             else: 
@@ -82,13 +82,28 @@ class GameEngine:
         if meta.get("description"): text += f"\n[italic]{meta['description']}[/italic]"
         return Panel(Align.center(text, vertical="middle"), title="References", border_style="magenta")
 
+    def resolve_path(self, data, path):
+        """Helper to resolve nested paths like 'data.ghost.chosePath'"""
+        if path.startswith("data."):
+            path = path[5:]
+        parts = path.split(".")
+        curr = data
+        for p in parts:
+            if isinstance(curr, dict) and p in curr:
+                curr = curr[p]
+            else:
+                return "None"
+        return curr
+
     def get_state_panel(self):
         table = Table(show_header=False, box=None, padding=(0, 1))
         vars_dict = self.data.get("variables", {})
         updated_vars = vars_dict.get("__updated_vars", [])
         if not updated_vars: table.add_row("", "[dim]No variables updated yet.[/dim]")
         else:
-            for var in reversed(updated_vars): table.add_row(f"  {var}:", str(vars_dict.get(var)))
+            for var in reversed(updated_vars): 
+                val = self.resolve_path(vars_dict, var)
+                table.add_row(f"  {var}:", str(val))
         return Panel(table, title="Current State", border_style="green")
 
     def get_script_panel(self):
@@ -145,7 +160,7 @@ class GameEngine:
         table.add_column("num", justify="right", style="dim cyan", width=4); table.add_column("content")
         
         for i in range(start, end):
-            content = lines[i].rstrip()
+            content = process_spans(lines[i].rstrip())
             if i == target_file_idx:
                 table.add_row(f"[bold cyan]{i+1}[/bold cyan]", Text(f"> {content}", style="bold white on grey15"))
             else:
@@ -166,9 +181,19 @@ class GameEngine:
         log = self.data.get("dialogue_log") or []
         styles = ["[bold yellow]{char}[/bold yellow]: [bold white]{text}[/bold white]", "[dim yellow]{char}[/dim yellow]: [grey42]{text}[/grey42]", "[grey30]{char}: {text}[/grey30]", "[grey15]{char}: {text}[/grey15]", "[grey11]{char}: {text}[/grey11]", "[grey3]{char}: {text}[/grey3]"]
         lines = []
-        for i in range(min(len(log), 6)):
-            entry = log[-(i+1)]
-            lines.insert(0, styles[i].format(char=entry['character'], text=entry['text']))
+        
+        # If there's active text (like a choice prompt), show it first (as the most recent)
+        active_text = process_spans(self.data.get("text"))
+        start_idx = 0
+        if self.data.get("type") == "choice" and active_text:
+            char = self.data.get("character") or "narrator"
+            lines.append(styles[0].format(char=char.capitalize(), text=active_text))
+            start_idx = 1
+
+        for i in range(start_idx, min(len(log) + start_idx, 6)):
+            entry = log[-(i+1-start_idx)]
+            processed_text = process_spans(entry['text'])
+            lines.insert(0, styles[i].format(char=entry['character'].capitalize(), text=processed_text))
         box_h = int((self.console.height - 3) * 0.35) - 2
         pad = "\n" * max(0, box_h - sum(len(l.split("\n")) + 1 for l in lines) - 1)
         main["diag"].update(Panel(pad + "\n\n".join(lines), title="Dialogue", border_style="cyan"))
@@ -239,8 +264,9 @@ class GameEngine:
                         elif key.key == Keys.Enter or key.key == Keys.ControlM:
                             if self.focus == "choices":
                                 if self.data.get("type") == "choice":
-                                    opt_keys = list(self.data["options"].keys())
-                                    cmd = opt_keys[self.choice_idx]
+                                    opt_keys = list(self.data.get("options", {}).keys())
+                                    if opt_keys and self.choice_idx < len(opt_keys):
+                                        cmd = opt_keys[self.choice_idx]
                                 elif self.data.get("type") == "missing_label":
                                     # 0: Generate, 1: Back
                                     cmd = "AI_GENERATE" if self.choice_idx == 0 else "B"
