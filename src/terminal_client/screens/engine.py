@@ -94,7 +94,10 @@ class GameEngine:
     def get_script_panel(self):
         curr_label = self.data.get("current_label", "")
         logical_index = self.data.get("line_index", 0)
-        rel_path = self.label_map.get(curr_label, "main.narrat")
+        rel_path = self.label_map.get(curr_label)
+        
+        if not rel_path:
+            return Panel(f"Script location for label '{curr_label}' not found.", title="Script Viewer", border_style="red")
         
         try:
             # We must use the absolute path relative to the engine's perspective
@@ -259,7 +262,12 @@ class GameEngine:
                             if cmd == "EDIT_SCRIPT":
                                 # Find current line index in file for external editor
                                 curr_label, l_idx = self.data.get("current_label"), self.data.get("line_index", 0)
-                                rel_path = self.label_map.get(curr_label, "main.narrat")
+                                rel_path = self.label_map.get(curr_label)
+                                
+                                if not rel_path:
+                                    console.print(f"[red]Could not find script file for label '{curr_label}'[/red]")
+                                    time.sleep(2); live.start(); continue
+
                                 full_p = os.path.join("games", self.game_id, "scripts", rel_path)
                                 
                                 with open(full_p, "r") as f: lines = f.readlines()
@@ -308,7 +316,11 @@ class GameEngine:
 
     def handle_edit(self):
         curr_label, l_idx = self.data.get("current_label"), self.data.get("line_index", 0)
-        rel_path = self.label_map.get(curr_label, "main.narrat")
+        rel_path = self.label_map.get(curr_label)
+        if not rel_path:
+            self.console.print(f"[red]Could not find script file for label '{curr_label}'[/red]")
+            time.sleep(2); return
+
         full_p = os.path.join("games", self.game_id, "scripts", rel_path)
         
         with open(full_p, "r") as f: lines = f.readlines()

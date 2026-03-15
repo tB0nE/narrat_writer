@@ -11,7 +11,7 @@ def get_game_path(game_id: str, *subpaths):
     games_dir = os.getenv("GARRAT_GAMES_DIR", "games")
     return os.path.join(games_dir, game_id, *subpaths)
 
-def get_script_path(game_id: str, relative_path: str = "main.narrat"):
+def get_script_path(game_id: str, relative_path: str):
     """Helper to get path to a script file within the scripts directory."""
     return get_game_path(game_id, "scripts", relative_path)
 

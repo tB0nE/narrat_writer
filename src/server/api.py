@@ -14,7 +14,7 @@ from src.server.models import (
     CreateGameRequest, GenerateRequest, DialogueResponse
 )
 from src.server.utils import (
-    get_game_path, load_metadata, save_metadata, 
+    get_game_path, get_script_path, load_metadata, save_metadata, 
     load_session, save_session, get_reference
 )
 from src.server.parser import NarratParser, evaluate_expression
@@ -209,7 +209,9 @@ def get_full_character_context(game_id: str, meta: GameMetadata) -> str:
 @app.post("/games/{game_id}/sessions/{session_id}/generate")
 async def generate_more_story(game_id: str, session_id: str, req: Dict[str, Any]):
     target = req.get("target")
-    rel_path = req.get("path", "main.narrat")
+    parser = NarratParser(game_id)
+    # Resolve which file to append to. Default to main.narrat if target is new or unknown
+    rel_path = req.get("path") or parser.label_to_file.get(target) or "main.narrat"
     state = load_session(game_id, session_id)
     meta = load_metadata(game_id)
     
@@ -236,8 +238,9 @@ async def generate_more_story(game_id: str, session_id: str, req: Dict[str, Any]
 
 @app.post("/games/{game_id}/sessions/{session_id}/continue")
 async def continue_story(game_id: str, session_id: str, req: Dict[str, Any] = None):
-    rel_path = (req or {}).get("path", "main.narrat")
     state = load_session(game_id, session_id)
+    parser = NarratParser(game_id)
+    rel_path = (req or {}).get("path") or parser.label_to_file.get(state.current_label) or "main.narrat"
     meta = load_metadata(game_id)
     
     char_context = get_full_character_context(game_id, meta) if meta else ""
@@ -560,8 +563,13 @@ async def edit_game(game_id: str, session_id: str, update: Dict[str, Any]):
         
         with open(p, "w") as f: f.write(content)
     elif cat == "script":
-        rel_path = update.get("meta", {}).get("path", "main.narrat")
-        p = get_game_path(game_id, "scripts", rel_path)
+        rel_path = update.get("meta", {}).get("path")
+        if not rel_path:
+            parser = NarratParser(game_id)
+            state = load_session(game_id, session_id)
+            rel_path = parser.label_to_file.get(state.current_label) or "main.narrat"
+
+        p = get_script_path(game_id, rel_path)
         with open(p, "r") as f: lines = f.readlines()
         lines[int(target)] = f"{re.match(r'^\s*', lines[int(target)]).group(0)}{content}\n"
         with open(p, "w") as f: f.writelines(lines)
@@ -582,9 +590,13 @@ async def edit_game(game_id: str, session_id: str, update: Dict[str, Any]):
 async def edit_game_ai(game_id: str, session_id: str, update: Dict[str, Any]):
     target_idx = int(update.get("target"))
     instruction = update.get("content")
-    rel_path = update.get("meta", {}).get("path", "main.narrat")
+    rel_path = update.get("meta", {}).get("path")
+    if not rel_path:
+        parser = NarratParser(game_id)
+        state = load_session(game_id, session_id)
+        rel_path = parser.label_to_file.get(state.current_label) or "main.narrat"
     
-    p = get_game_path(game_id, "scripts", rel_path)
+    p = get_script_path(game_id, rel_path)
     with open(p, "r") as f: lines = f.readlines()
     
     old_line = lines[target_idx].strip()
