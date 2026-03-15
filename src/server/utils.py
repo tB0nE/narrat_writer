@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from typing import Optional
+from typing import Optional, List, Tuple
 from src.server.models import GameMetadata, SessionState
 
 logger = logging.getLogger("narrat_api")
@@ -82,6 +82,23 @@ def save_session(game_id: str, state: SessionState):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         f.write(state.model_dump_json(indent=2))
+
+def sanitize_env_value(value: str) -> str:
+    """Sanitizes environment variable value to prevent newline injection."""
+    return str(value).replace("\n", "").replace("\r", "")
+
+def update_env_lines(env_lines: List[str], key: str, value: str) -> Tuple[List[str], str]:
+    """Updates or appends an environment variable line in a list of lines."""
+    value = sanitize_env_value(value)
+    found = False
+    for i, line in enumerate(env_lines):
+        if line.startswith(f"{key}="):
+            env_lines[i] = f"{key}={value}\n"
+            found = True
+            break
+    if not found:
+        env_lines.append(f"{key}={value}\n")
+    return env_lines, value
 
 def get_reference(game_id: str, category: str, name: str, sub_type: str = None):
     """Fetches a reference text file (character desc, background info, etc.)."""
