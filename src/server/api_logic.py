@@ -23,22 +23,28 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
     if command and command.strip().isdigit():
         # The 'choice:' line is at state.line_index - 1
         line_data = parser.get_line(state.current_label, state.line_index - 1)
-        if line_data and line_data[1].strip() == "choice:":
-            options, _, end_idx = parse_choice_options(parser, state.current_label, state.line_index)
+        if line_data and re.match(r'^\s*choice:\s*(?://.*)?$', line_data[1]):
+            options, _, end_idx = parse_choice_options(parser, state, state.current_label, state.line_index)
             if command.strip() in options:
                 opt = options[command.strip()]
-                # Store where to jump AFTER the choice block finishes
-                state.variables["__choice_end_index"] = end_idx
+                
+                # Push to choice stack for nested logic
+                if "__choice_stack" not in state.variables: state.variables["__choice_stack"] = []
+                state.variables["__choice_stack"].append(end_idx)
                 
                 if "target_line" in opt:
-                    state.current_label, state.line_index = opt["target"], opt["target_line"]
+                    # Jumping to a line in the same label
+                    state.current_label = opt["target"] # ALWAYS update label
+                    state.line_index = opt["target_line"]
+                    logger.info(f"Choice selected: {command} -> {state.current_label} @ {state.line_index}")
                 else:
-                    state.current_label, state.line_index = opt["target"], 0
-                    # If we jumped to a NEW label, we lose the choice_end_index context for that label
-                    if opt["target"] != state.current_label:
-                        state.variables.pop("__choice_end_index", None)
-                
-                logger.info(f"Choice selected: {command} -> {state.current_label} @ {state.line_index}")
+                    # Jumping to a new label
+                    target = opt["target"]
+                    state.current_label, state.line_index = target, 0
+                    # If we jumped to a NEW label, we lose the choice stack for that label's flow
+                    # (Standard Narrat behavior: jump breaks out of blocks)
+                    state.variables.pop("__choice_stack", None)
+                    logger.info(f"Choice selected: {command} -> New label: {target}")
             else:
                 logger.warning(f"Invalid choice index: {command}")
 
@@ -46,29 +52,29 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
     loop_safety = 0
     while loop_safety < 500:
         loop_safety += 1
+        if not state.current_label:
+            logger.error("State current_label is EMPTY!")
+            state.current_label = "main" # Recovery attempt
+
         line_data = parser.get_line(state.current_label, state.line_index)
         
         if line_data is None:
+            logger.info(f"End of lines for label '{state.current_label}' at index {state.line_index}")
             # Check if we were in a choice block and need to return
-            if "__choice_end_index" in state.variables:
-                state.line_index = state.variables.pop("__choice_end_index")
+            if "__choice_stack" in state.variables and state.variables["__choice_stack"]:
+                state.line_index = state.variables["__choice_stack"].pop()
+                logger.info(f"Popped from choice stack, returning to {state.line_index}")
                 continue
 
             if state.current_label not in parser.labels:
+                logger.warning(f"Label '{state.current_label}' missing from parser!")
                 return DialogueResponse(type="missing_label", meta={"target": state.current_label}, text=f"Label '{state.current_label}' missing.", variables=state.variables, dialogue_log=state.dialogue_log)
+            
             return DialogueResponse(type="end", text="End of script.", variables=state.variables, dialogue_log=state.dialogue_log)
 
         line_num, line_text = line_data
         stripped = line_text.strip()
         indent = len(line_text) - len(line_text.lstrip())
-
-        # If we reached a line with less or equal indent than the choice option we were executing,
-        # and we have a choice_end_index, it means we finished the option block.
-        if "__choice_end_index" in state.variables:
-             # This is a bit simplistic, but usually options are indented.
-             # If we are NOT indented relative to the choice: line, we might have finished.
-             # However, the loop below handles skipping other options.
-             pass
 
         if not stripped or stripped.startswith("//"):
             state.line_index += 1; continue
@@ -96,6 +102,7 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
         if re.match(r'^(?:set|var)\s+([\w_.]+)\s+(.*)$', stripped):
             m = re.match(r'^(?:set|var)\s+([\w_.]+)\s+(.*)$', stripped)
             var_path, val_str = m.group(1), m.group(2).strip()
+            # ... (rest of set logic unchanged)
             if val_str.isdigit(): val = int(val_str)
             elif val_str.lower() == "true": val = True
             elif val_str.lower() == "false": val = False
@@ -118,39 +125,11 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
 
             state.line_index += 1; continue
 
-        if re.match(r'^add\s+([\w_.]+)\s+(.*)$', stripped):
-            m = re.match(r'^add\s+([\w_.]+)\s+(.*)$', stripped)
-            var_path, val_str = m.group(1), m.group(2).strip()
-            # Try to evaluate or parse the value to add
-            try:
-                val = int(val_str)
-            except:
-                val = evaluate_expression(val_str, state.variables)
-            
-            clean_path = var_path[5:] if var_path.startswith("data.") else var_path
-            path_parts = clean_path.split(".")
-            curr = state.variables
-            for p in path_parts[:-1]:
-                if p not in curr or not isinstance(curr[p], dict): curr[p] = {}
-                curr = curr[p]
-            
-            old_val = curr.get(path_parts[-1], 0)
-            if isinstance(old_val, (int, float)) and isinstance(val, (int, float)):
-                curr[path_parts[-1]] = old_val + val
-
-            # Tracking
-            if "__updated_vars" not in state.variables: state.variables["__updated_vars"] = []
-            if var_path not in state.variables["__updated_vars"]: 
-                state.variables["__updated_vars"].append(var_path)
-            if len(state.variables["__updated_vars"]) > 10: 
-                state.variables["__updated_vars"].pop(0)
-
-            state.line_index += 1; continue
-
         if re.match(r'^(?:jump|->)\s+([\w_]+)', stripped):
             target = re.match(r'^(?:jump|->)\s+([\w_]+)', stripped).group(1)
+            logger.info(f"Jumping to '{target}'")
             state.current_label, state.line_index = target, 0
-            state.variables.pop("__choice_end_index", None) # Jump breaks choice block
+            state.variables.pop("__choice_stack", None) # Jump breaks choice block
             continue
 
         if re.match(r'^if\s+(.*):$', stripped):
@@ -169,22 +148,17 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
             continue
 
         if re.match(r'^roll\s+([\w_.]+)\s+([\w_.]+)\s+(\d+)', stripped):
+            # ... (roll logic unchanged)
             m = re.match(r'^roll\s+([\w_.]+)\s+([\w_.]+)\s+(\d+)', stripped)
             roll_id, stat_id, threshold = m.group(1), m.group(2), int(m.group(3))
-            
-            # Simple dice roll for now
             import random
             roll_val = random.randint(1, 100)
             success = roll_val >= threshold
-            
-            # Tracking
             if "__updated_vars" not in state.variables: state.variables["__updated_vars"] = []
             if roll_id not in state.variables["__updated_vars"]: 
                 state.variables["__updated_vars"].append(roll_id)
             if len(state.variables["__updated_vars"]) > 10: 
                 state.variables["__updated_vars"].pop(0)
-
-            # Store result for subsequent 'if' block
             state.variables[roll_id] = success
             state.line_index += 1; continue
 
@@ -195,8 +169,8 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
 
         # --- B. BLOCKING COMMANDS ---
 
-        if stripped == "choice:":
-            options, prompt_text, end_idx = parse_choice_options(parser, state.current_label, state.line_index + 1)
+        if re.match(r'^\s*choice:\s*(?://.*)?$', stripped):
+            options, prompt_text, end_idx = parse_choice_options(parser, state, state.current_label, state.line_index + 1)
             res_idx = state.line_index
             state.line_index += 1
             save_and_log_state(game_id, state)
@@ -212,23 +186,25 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
             save_and_log_state(game_id, state)
             return build_response(game_id, state, "talk", character=char, text=text, line_index=res_idx)
 
-        # If we haven't matched anything and we have a choice_end_index, 
+        # If we haven't matched anything and we have a choice stack, 
         # check if we just hit another option (which means we should skip to the end)
-        if "__choice_end_index" in state.variables:
+        if "__choice_stack" in state.variables and state.variables["__choice_stack"]:
              # If this line is an option line at the same indent as the choice block's options,
              # it means we finished our selected option and are hitting the next one.
-             # We should skip to the end of the choice block.
-             state.line_index = state.variables.pop("__choice_end_index")
-             continue
+             if re.match(r'^\s*"(.*)"\s*(?:if\s+.*)?:\s*(?://.*)?$', line_text):
+                 state.line_index = state.variables["__choice_stack"].pop()
+                 logger.info(f"Hit another option, jumping to end index {state.line_index}")
+                 continue
 
         # Unrecognized - skip
+        logger.warning(f"Unknown line at {state.current_label} @ {state.line_index}: '{stripped}'")
         state.line_index += 1
 
     return DialogueResponse(type="end", text="Safety limit.")
 
 # --- HELPERS ---
 
-def parse_choice_options(parser, label, start_idx):
+def parse_choice_options(parser, state, label, start_idx):
     options, opt_idx, temp_idx = {}, 1, start_idx
     prompt_text = []
     
@@ -299,8 +275,11 @@ def parse_choice_options(parser, label, start_idx):
             
         if target_lbl:
             options[str(opt_idx)] = {"text": label_text, "target": target_lbl}
+            logger.info(f"Option {opt_idx}: target={target_lbl}")
         else:
+            # If no jump, jump to the next line after the option definition within the SAME label
             options[str(opt_idx)] = {"text": label_text, "target": label, "target_line": temp_idx + 1}
+            logger.info(f"Option {opt_idx}: target_line={temp_idx + 1} (same label)")
 
         opt_idx += 1
         temp_idx += 1
@@ -342,13 +321,19 @@ def build_response(game_id, state, rtype, **kwargs):
         "placeholder": get_reference(game_id, "characters", char, "idle"),
         "emotion": state.variables.get(f"__emo_{char}", "Neutral")
     }
+    
+    res_label = kwargs.get("current_label", state.current_label)
+    if not res_label:
+        logger.error("Attempting to build response with EMPTY label!")
+        res_label = "main"
+
     return DialogueResponse(
         type=rtype,
         character=char,
         background=bg,
         background_desc=get_reference(game_id, "backgrounds", bg) if bg != "None" else "",
         meta={**char_meta, **kwargs.get("meta", {})},
-        current_label=state.current_label,
+        current_label=res_label,
         line_index=kwargs.get("line_index", state.line_index),
         variables=state.variables,
         dialogue_log=state.dialogue_log,
