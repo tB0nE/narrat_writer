@@ -13,9 +13,28 @@ from prompt_toolkit.keys import Keys
 console = Console()
 BASE_URL = "http://localhost:8045"
 
-def process_spans(text: str) -> str:
-    """Converts HTML spans with specific classes to Rich markup."""
+def clean_text(text: str) -> str:
+    """Cleans Narrat script text: strips outer quotes once, then unescapes inner content."""
     if not text: return text
+    text = text.strip()
+    
+    # 1. Strip ONE layer of outer quotes if they exist
+    if len(text) >= 2:
+        if (text[0] == '"' and text[-1] == '"') or (text[0] == "'" and text[-1] == "'"):
+            text = text[1:-1]
+            
+    # 2. Unescape common characters
+    text = text.replace('\\\\', '\\')
+    text = text.replace('\\"', '"').replace("\\'", "'").replace('\\n', '\n').replace('\\t', '\t')
+    
+    return text
+
+def process_spans(text: str) -> str:
+    """Converts HTML spans with specific classes to Rich markup and cleans text."""
+    if not text: return text
+    
+    # Clean text first (handle escapes/quotes)
+    text = clean_text(text)
     
     # Mapping of Narrat/Lovely Lady RPG classes to Rich styles
     style_map = {

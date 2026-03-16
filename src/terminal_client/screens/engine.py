@@ -194,9 +194,12 @@ class GameEngine:
             entry = log[-(i+1-start_idx)]
             processed_text = process_spans(entry['text'])
             lines.insert(0, styles[i].format(char=entry['character'].capitalize(), text=processed_text))
+        
+        # Original padding logic
         box_h = int((self.console.height - 3) * 0.35) - 2
         pad = "\n" * max(0, box_h - sum(len(l.split("\n")) + 1 for l in lines) - 1)
         main["diag"].update(Panel(pad + "\n\n".join(lines), title="Dialogue", border_style="cyan"))
+        
         footer_content = ""
         if self.data.get("type") == "missing_label": 
             target = self.data.get("meta", {}).get("target", "unknown")
@@ -215,16 +218,15 @@ class GameEngine:
         elif self.data.get("type") == "end": 
             footer_content = f"\n[bold red]End of Script.[/bold red]"
         
-        # Determine border style based on focus
         low_border = "yellow"
         if self.focus == "choices": low_border = "bold green"
-        
         main["low"].split_column(Layout(Panel(footer_content, title="Input / Choice", border_style=low_border), ratio=70), Layout(Align.center(self.get_actions_row()), ratio=30))
         return layout
 
     def run(self):
-        res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
-        self.data = res.json()
+        if not self.data:
+            res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
+            self.data = res.json()
         if os.getenv("NARRAT_TEST_MODE") == "1":
             while True:
                 self.console.print(self.display_game())

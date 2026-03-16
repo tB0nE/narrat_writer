@@ -301,6 +301,7 @@ async def step_game(game_id: str, session_id: str, update: GameUpdate):
     
     parser = NarratParser(game_id)
     if update.command == "R":
+        parser.refresh()
         state.line_index = 0
         return await process_current_step(game_id, state, parser, "B_REPROCESS")
     if update.command == "B":

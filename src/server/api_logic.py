@@ -12,6 +12,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("narrat_api")
 
+def unescape_narrat_text(text: str) -> str:
+    """Cleans Narrat script text: strips outer quotes once, then unescapes inner content."""
+    if not text: return text
+    text = text.strip()
+    
+    # 1. Strip ONE layer of outer quotes if they exist
+    if len(text) >= 2:
+        if (text[0] == '"' and text[-1] == '"') or (text[0] == "'" and text[-1] == "'"):
+            text = text[1:-1]
+            
+    # 2. Unescape common characters
+    text = text.replace('\\\\', '\\')
+    text = text.replace('\\"', '"').replace("\\'", "'").replace('\\n', '\n').replace('\\t', '\t')
+    
+    return text
+
 async def process_current_step(game_id: str, state: SessionState, parser: 'NarratParser', command: str = None):
     """
     Standard VN 'Run-until-blocked' loop.
@@ -95,7 +111,7 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
             if val_str.isdigit(): val = int(val_str)
             elif val_str.lower() == "true": val = True
             elif val_str.lower() == "false": val = False
-            else: val = val_str.strip('"').strip("'")
+            else: val = unescape_narrat_text(val_str)
             
             clean_path = var_path[5:] if var_path.startswith("data.") else var_path
             path_parts = clean_path.split(".")
@@ -174,7 +190,7 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
             await asyncio.sleep(ms / 1000.0)
             state.line_index += 1; continue
 
-        if re.match(r'^(?:play|stop|run|save|load|complete_objective|set_button|clear_dialog|add_stat|add_level)\b', stripped):
+        if re.match(r'^(?:play|stop|run|save|load|complete_objective|set_button|add_stat|add_level)\b', stripped):
             state.line_index += 1; continue
 
         # --- B. BLOCKING COMMANDS ---
@@ -233,7 +249,7 @@ def parse_choice_options(parser, state, label, start_idx):
         opt_match = re.match(r'^\s*"(.*)"\s*(?:if\s+(.*))?:\s*(?://.*)?$', raw)
         if not opt_match: break
             
-        label_text = opt_match.group(1); condition = opt_match.group(2)
+        label_text = unescape_narrat_text(opt_match.group(1)); condition = opt_match.group(2)
         base_indent = len(raw) - len(raw.lstrip())
         
         if condition:
@@ -261,10 +277,12 @@ def parse_choice_options(parser, state, label, start_idx):
 def match_dialogue(stripped):
     m = re.match(r'^(?:talk\s+)?([\w_]+)(?:\s+[\w_]+)?\s+"(.*)"$', stripped)
     if m and m.group(1) not in ["background", "scene", "jump", "set", "set_expression", "choice", "if", "else", "var", "wait", "add", "clear_dialog", "play", "stop", "run", "roll", "complete_objective", "set_button", "save", "load"]:
-        return m.group(1), m.group(2)
+        return m.group(1), unescape_narrat_text(m.group(2))
     m = re.match(r'^"(.*)"$', stripped)
-    if m: return "narrator", m.group(1)
+    if m: return "narrator", unescape_narrat_text(m.group(1))
     return None, None
+
+
 
 def save_and_log_state(game_id, state):
     snapshot = state.model_dump(exclude={"history"})
