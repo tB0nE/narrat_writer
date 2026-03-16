@@ -183,15 +183,27 @@ class GameEngine:
         lines = []
         
         # If there's active text (like a choice prompt), show it first (as the most recent)
-        active_text = process_spans(self.data.get("text"))
+        raw_text = self.data.get("text")
+        active_text = process_spans(raw_text)
+        
+        display_log = list(log)
+        # Avoid duplicating the last log entry if it's identical to active text
+        if active_text and display_log and process_spans(display_log[-1]['text']) == active_text:
+            display_log.pop()
+
         start_idx = 0
-        if self.data.get("type") == "choice" and active_text:
+        if active_text:
             char = self.data.get("character") or "narrator"
-            lines.append(styles[0].format(char=char.capitalize(), text=active_text))
+            # If the text already has a colon in the first 20 chars (e.g. "Orb: Debatable"),
+            # it's already attributed, so we don't add the prefix again.
+            if ": " in active_text[:20]:
+                lines.append(active_text)
+            else:
+                lines.append(styles[0].format(char=char.capitalize(), text=active_text))
             start_idx = 1
 
-        for i in range(start_idx, min(len(log) + start_idx, 6)):
-            entry = log[-(i+1-start_idx)]
+        for i in range(start_idx, min(len(display_log) + start_idx, 6)):
+            entry = display_log[-(i+1-start_idx)]
             processed_text = process_spans(entry['text'])
             lines.insert(0, styles[i].format(char=entry['character'].capitalize(), text=processed_text))
         

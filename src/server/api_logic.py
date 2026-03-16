@@ -4,7 +4,7 @@ import logging
 import asyncio
 from typing import TYPE_CHECKING, Dict, List, Optional, Any
 from src.server.models import DialogueResponse, SessionState
-from src.server.utils import get_reference, save_session
+from src.server.utils import get_reference, save_session, load_metadata
 from src.server.expressions import evaluate_expression
 
 if TYPE_CHECKING:
@@ -41,12 +41,19 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
         line_data = parser.get_line(state.current_label, target_idx)
         
         if line_data and re.match(r'^\s*choice:\s*(?://.*)?$', line_data[1]):
-            options, _, end_idx = parse_choice_options(parser, state, state.current_label, target_idx + 1)
+            options, _, _, end_idx = parse_choice_options(parser, state, state.current_label, target_idx + 1)
             if command.strip() in options:
                 opt = options[command.strip()]
                 
+                # Record the selection in the dialogue log
+                meta = load_metadata(game_id)
+                p_name = meta.player_name if meta and meta.player_name else "player"
+                state.dialogue_log.append({"character": p_name.capitalize(), "text": opt["text"]})
+                if len(state.dialogue_log) > 20: state.dialogue_log.pop(0)
+                
                 # Push to choice stack for nested logic
-                if "__choice_stack" not in state.variables: state.variables["__choice_stack"] = []
+                if "__choice_stack" not in state.variables:
+                    state.variables["__choice_stack"] = []
                 state.variables["__choice_stack"].append(end_idx)
                 
                 state.current_label = opt["target"]
@@ -197,11 +204,17 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
 
         if re.match(r'^\s*choice:\s*(?://.*)?$', stripped):
             state.last_choice_index = state.line_index
-            options, prompt_text, end_idx = parse_choice_options(parser, state, state.current_label, state.line_index + 1)
+            options, prompt_text, prompt_char, end_idx = parse_choice_options(parser, state, state.current_label, state.line_index + 1)
+            
+            if prompt_text:
+                # Add prompt to log
+                state.dialogue_log.append({"character": prompt_char or "narrator", "text": prompt_text})
+                if len(state.dialogue_log) > 20: state.dialogue_log.pop(0)
+
             res_idx = state.line_index
             state.line_index += 1
             save_and_log_state(game_id, state)
-            return build_response(game_id, state, "choice", options=options, text=prompt_text or None, line_index=res_idx)
+            return build_response(game_id, state, "choice", options=options, text=prompt_text or None, character=prompt_char, line_index=res_idx)
 
         char, text = match_dialogue(stripped)
         if char:
@@ -225,7 +238,7 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
 
 def parse_choice_options(parser, state, label, start_idx):
     options, opt_idx, temp_idx = {}, 1, start_idx
-    prompt_text = []
+    prompt_lines = []
     
     # 1. Collect leading text
     while True:
@@ -237,8 +250,18 @@ def parse_choice_options(parser, state, label, start_idx):
             temp_idx += 1; continue
         if re.match(r'^\s*"(.*)"\s*(?:if\s+.*)?:\s*(?://.*)?$', raw): break
         char, text = match_dialogue(txt)
-        if char: prompt_text.append(f"{char}: {text}" if char != "narrator" else text)
+        if char: prompt_lines.append((char, text))
         temp_idx += 1
+
+    # Format prompt text and determine character attribution
+    if len(prompt_lines) == 1:
+        res_char, res_text = prompt_lines[0]
+    elif len(prompt_lines) > 1:
+        res_char = "narrator"
+        res_text = "\n".join([f"{c}: {t}" if c != "narrator" else t for c, t in prompt_lines])
+    else:
+        res_char = None
+        res_text = None
 
     # 2. Collect options
     while True:
@@ -272,7 +295,7 @@ def parse_choice_options(parser, state, label, start_idx):
             if not n_data or (n_data[1].strip() and (len(n_data[1]) - len(n_data[1].lstrip())) <= base_indent): break
             temp_idx += 1
                 
-    return options, "\n".join(prompt_text), temp_idx
+    return options, res_text, res_char, temp_idx
 
 def match_dialogue(stripped):
     m = re.match(r'^(?:talk\s+)?([\w_]+)(?:\s+[\w_]+)?\s+"(.*)"$', stripped)

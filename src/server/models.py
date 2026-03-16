@@ -10,6 +10,7 @@ class GameMetadata(BaseModel):
     scenes: List[str] = []
     variables: List[str] = []
     starting_point: str = "main"
+    player_name: Optional[str] = None
     plot_outline: Optional[str] = None
     prompt_prefix: Optional[str] = None
 
