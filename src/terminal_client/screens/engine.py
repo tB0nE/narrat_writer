@@ -3,6 +3,7 @@ import re
 import time
 import questionary
 import os
+from typing import Dict, List, Optional, Any
 from rich.panel import Panel
 from rich.layout import Layout
 from rich.live import Live
@@ -235,19 +236,33 @@ class GameEngine:
         main["low"].split_column(Layout(Panel(footer_content, title="Input / Choice", border_style=low_border), ratio=70), Layout(Align.center(self.get_actions_row()), ratio=30))
         return layout
 
+    def set_data(self, data: Dict[str, Any]):
+        self.data = data
+        if self.data.get("type") in ["choice", "missing_label"]:
+            self.focus = "choices"
+            self.choice_idx = 0
+        else:
+            self.focus = "actions"
+
     def run(self):
         step_delay = float(os.getenv("NARRAT_STEP_DELAY", "0.2"))
         if not self.data:
             res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
-            self.data = res.json()
-            if step_delay > 0: time.sleep(step_delay)
+            self.set_data(res.json())
+            
+            # Initial auto-step check
+            while self.data.get("type") in ["choice_confirmed", "clear"]:
+                self.console.print(self.display_game())
+                if step_delay > 0: time.sleep(step_delay)
+                res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
+                self.set_data(res.json())
         
         if os.getenv("NARRAT_TEST_MODE") == "1":
             while True:
                 self.console.print(self.display_game())
                 if self.data["type"] == "end": return
                 res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
-                self.data = res.json()
+                self.set_data(res.json())
                 if step_delay > 0: time.sleep(step_delay)
             return
         
@@ -255,6 +270,14 @@ class GameEngine:
         with Live(self.display_game(), auto_refresh=False, screen=True) as live:
             with input_obj.raw_mode():
                 while True:
+                    # Auto-step logic for transitional states
+                    if self.data.get("type") in ["choice_confirmed", "clear"]:
+                        live.update(self.display_game()); live.refresh()
+                        if step_delay > 0: time.sleep(step_delay)
+                        res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
+                        self.set_data(res.json())
+                        continue
+
                     live.update(self.display_game()); live.refresh()
                     keys = input_obj.read_keys()
                     if not keys:
@@ -331,22 +354,26 @@ class GameEngine:
                                 self.handle_edit()
                             live.start()
                             res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "B_REPROCESS"})
-                            self.data = res.json()
+                            self.set_data(res.json())
                         elif cmd == "AI_GENERATE":
                             live.stop()
                             with console.status("AI is generating missing content..."):
                                 requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/generate", json={"target": self.data["meta"]["target"]})
                             # Use B_REPROCESS to reload the script and stay on the current label (which now exists)
                             res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "B_REPROCESS"})
-                            self.data = res.json(); live.start()
+                            self.set_data(res.json()); live.start()
                         else:
                             res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": str(cmd)})
-                            self.data = res.json()
-                            if step_delay > 0: time.sleep(step_delay)
+                            self.set_data(res.json())
+                            
+                            # Only sleep for 'Next' command if we hit a content state.
+                            # Choice selections (numeric cmd) are handled by the auto-step logic below to avoid double-sleeping.
+                            # Utility commands like Reload (R) or Back (B) should be instant.
+                            if cmd == " " and step_delay > 0:
+                                if self.data.get("type") in ["talk", "choice", "end"]:
+                                    time.sleep(step_delay)
                             
                             if cmd == "R": self.action_idx = 0
-                            if self.data.get("type") in ["choice", "missing_label"]: 
-                                self.focus, self.choice_idx = "choices", 0
                             
                             if self.data.get("type") == "end":
                                 live.stop()
@@ -354,12 +381,12 @@ class GameEngine:
                                 if c == "Generate More":
                                     requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/continue")
                                     res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
-                                    self.data = res.json()
+                                    self.set_data(res.json())
                                     if step_delay > 0: time.sleep(step_delay)
                                     live.start()
                                 elif c == "Restart":
                                     res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
-                                    self.data = res.json()
+                                    self.set_data(res.json())
                                     if step_delay > 0: time.sleep(step_delay)
                                     live.start()
                                 else: return
