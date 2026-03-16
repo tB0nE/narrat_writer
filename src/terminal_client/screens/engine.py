@@ -245,7 +245,9 @@ class GameEngine:
             self.focus = "actions"
 
     def run(self):
-        step_delay = float(os.getenv("NARRAT_STEP_DELAY", "0.2"))
+        talk_delay = float(os.getenv("NARRAT_TALK_DELAY", "0.2"))
+        choice_delay = float(os.getenv("NARRAT_CHOICE_DELAY", "0.7"))
+        
         if not self.data:
             res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
             self.set_data(res.json())
@@ -253,7 +255,7 @@ class GameEngine:
             # Initial auto-step check
             while self.data.get("type") in ["choice_confirmed", "clear"]:
                 self.console.print(self.display_game())
-                if step_delay > 0: time.sleep(step_delay)
+                if choice_delay > 0: time.sleep(choice_delay)
                 res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
                 self.set_data(res.json())
         
@@ -263,7 +265,10 @@ class GameEngine:
                 if self.data["type"] == "end": return
                 res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
                 self.set_data(res.json())
-                if step_delay > 0: time.sleep(step_delay)
+                if self.data.get("type") in ["choice_confirmed", "clear"]:
+                    if choice_delay > 0: time.sleep(choice_delay)
+                else:
+                    if talk_delay > 0: time.sleep(talk_delay)
             return
         
         input_obj = create_input()
@@ -273,7 +278,7 @@ class GameEngine:
                     # Auto-step logic for transitional states
                     if self.data.get("type") in ["choice_confirmed", "clear"]:
                         live.update(self.display_game()); live.refresh()
-                        if step_delay > 0: time.sleep(step_delay)
+                        if choice_delay > 0: time.sleep(choice_delay)
                         res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
                         self.set_data(res.json())
                         continue
@@ -367,11 +372,11 @@ class GameEngine:
                             self.set_data(res.json())
                             
                             # Only sleep for 'Next' command if we hit a content state.
-                            # Choice selections (numeric cmd) are handled by the auto-step logic below to avoid double-sleeping.
+                            # Choice selections (numeric cmd) are handled by the auto-step logic above to avoid double-sleeping.
                             # Utility commands like Reload (R) or Back (B) should be instant.
-                            if cmd == " " and step_delay > 0:
+                            if cmd == " " and talk_delay > 0:
                                 if self.data.get("type") in ["talk", "choice", "end"]:
-                                    time.sleep(step_delay)
+                                    time.sleep(talk_delay)
                             
                             if cmd == "R": self.action_idx = 0
                             
@@ -382,12 +387,12 @@ class GameEngine:
                                     requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/continue")
                                     res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
                                     self.set_data(res.json())
-                                    if step_delay > 0: time.sleep(step_delay)
+                                    if talk_delay > 0: time.sleep(talk_delay)
                                     live.start()
                                 elif c == "Restart":
                                     res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
                                     self.set_data(res.json())
-                                    if step_delay > 0: time.sleep(step_delay)
+                                    if talk_delay > 0: time.sleep(talk_delay)
                                     live.start()
                                 else: return
 
