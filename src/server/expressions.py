@@ -1,47 +1,58 @@
 
 import re
+import random
+import logging
+
+logger = logging.getLogger("narrat_api")
 
 def evaluate_expression(expr: str, variables: dict) -> bool:
     """
     Evaluator for Narrat-style prefix notation expressions.
-    Example: (&& $data.a $data.b) or (!= $data.intro.feelFace true)
+    Handles variables with or without $, numbers, booleans, and functions like roll.
     """
     try:
         expr = expr.strip()
         if expr.startswith("(") and expr.endswith(")"):
             expr = expr[1:-1].strip()
         
-        # Tokenize carefully to handle quotes
-        tokens = re.findall(r'"[^"]*"|\'[^\']*\'|\$?\w+(?:\.[\w.]+)*|[^\s\w$.]', expr)
+        # Tokenize carefully to handle multi-character operators and quotes
+        tokens = re.findall(r'"[^"]*"|\'[^\']*\'|\$?\w+(?:\.[\w.]+)*|==|!=|>=|<=|&&|\|\||[^\s\w$.]', expr)
         if not tokens: return False
 
         def get_val(v):
-            if v.startswith("$"):
-                raw_path = v[1:]
-                # Narrat often uses $data.something, we strip $data. if it's there
-                # as our variables dict usually starts from 'data' being root or implicit
-                clean_path = raw_path[5:] if raw_path.startswith("data.") else raw_path
-                path = clean_path.split(".")
-                curr = variables
-                for p in path:
-                    if isinstance(curr, dict) and p in curr:
-                        curr = curr[p]
-                    else:
-                        return None
-                return curr
-            if v.lower() == "true": return True
-            if v.lower() == "false": return False
+            if not v: return None
+            v_lower = v.lower()
+            if v_lower == "true": return True
+            if v_lower == "false": return False
             if v.isdigit(): return int(v)
-            return v.strip('"').strip("'")
+            if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                return v[1:-1]
+            
+            # Resolve as variable (loose handling of $)
+            raw_path = v[1:] if v.startswith("$") else v
+            clean_path = raw_path[5:] if raw_path.startswith("data.") else raw_path
+            path = clean_path.split(".")
+            curr = variables
+            for p in path:
+                if isinstance(curr, dict) and p in curr:
+                    curr = curr[p]
+                else:
+                    return None
+            return curr
 
-        # Handle prefix operators
         op = tokens[0]
         
+        if op == "roll":
+            # (roll id stat threshold) -> threshold is usually the 4th token
+            try:
+                threshold = int(get_val(tokens[3]))
+                return random.randint(1, 100) >= threshold
+            except: return False
+
         if op == "!":
             return not bool(get_val(tokens[1]))
         
         if op == "&&":
-            # (&& val1 val2 val3 ...)
             return all(bool(get_val(t)) for t in tokens[1:])
         
         if op == "||":
@@ -65,10 +76,9 @@ def evaluate_expression(expr: str, variables: dict) -> bool:
         if op == "<=":
             return get_val(tokens[1]) <= get_val(tokens[2])
             
-        # Fallback for single value
+        # Fallback for single value or variable
         return bool(get_val(op))
 
     except Exception as e:
-        import logging
-        logging.getLogger("narrat_api").error(f"Expression error: {expr} -> {e}")
+        logger.error(f"Expression error: {expr} -> {e}")
         return False

@@ -110,15 +110,36 @@ async def update_api_config(new_config: Dict[str, Any]):
 
 @app.get("/games")
 async def list_games():
-    """Lists all games currently available with detailed metadata."""
+    """Lists all games currently available, sorted by last played/updated."""
     games_dir = os.getenv("GARRAT_GAMES_DIR", "games")
     if not os.path.exists(games_dir): return {"games": []}
+    
     games = []
     for d in os.listdir(games_dir):
-        if os.path.isdir(os.path.join(games_dir, d)):
+        game_path = os.path.join(games_dir, d)
+        if os.path.isdir(game_path):
+            # Determine last updated time (newest save or metadata)
+            last_time = 0
+            meta_path = os.path.join(game_path, "metadata.json")
+            if os.path.exists(meta_path):
+                last_time = os.path.getmtime(meta_path)
+            
+            saves_dir = os.path.join(game_path, "saves")
+            if os.path.exists(saves_dir):
+                for f in os.listdir(saves_dir):
+                    if f.endswith(".json"):
+                        last_time = max(last_time, os.path.getmtime(os.path.join(saves_dir, f)))
+            
             meta = load_metadata(d, sync=True)
             if meta: 
-                games.append({"id": d, "title": meta.title, "summary": meta.summary, "genre": meta.genre, "characters": meta.characters, "plot_outline": meta.plot_outline})
+                games.append({
+                    "id": d, "title": meta.title, "summary": meta.summary, 
+                    "genre": meta.genre, "characters": meta.characters, 
+                    "plot_outline": meta.plot_outline, "last_updated": last_time
+                })
+    
+    # Sort by last_updated descending
+    games.sort(key=lambda x: x["last_updated"], reverse=True)
     return {"games": games}
 
 @app.get("/games/{game_id}/validate")
@@ -273,7 +294,11 @@ async def continue_story(game_id: str, session_id: str, req: Dict[str, Any] = No
 
 @app.post("/games/{game_id}/sessions/{session_id}/step")
 async def step_game(game_id: str, session_id: str, update: GameUpdate):
+    logger.info(f"API Step: {game_id}/{session_id} cmd='{update.command}'")
     state = load_session(game_id, session_id)
+    # Ensure it's saved immediately if it's new
+    save_session(game_id, state)
+    
     parser = NarratParser(game_id)
     if update.command == "R":
         state.line_index = 0
@@ -287,6 +312,8 @@ async def step_game(game_id: str, session_id: str, update: GameUpdate):
             state = SessionState(**prev_state_dict)
             save_session(game_id, state)
             return await process_current_step(game_id, state, parser, "B_REPROCESS")
+    
+    logger.info(f"Dispatching to logic: {state.current_label} @ {state.line_index}")
     return await process_current_step(game_id, state, parser, update.command)
 
 @app.get("/games/{game_id}/scripts/content")
@@ -665,7 +692,9 @@ async def list_saves(game_id: str):
                     "last_text": st.dialogue_log[-1]["text"] if st.dialogue_log else "Start", 
                     "timestamp": mtime
                 })
-            except: continue
+            except Exception as e:
+                logger.error(f"Error loading save {sid}: {e}")
+                continue
     saves.sort(key=lambda x: x["timestamp"], reverse=True)
     return {"saves": saves}
 
