@@ -57,15 +57,12 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
                 state.variables["__choice_stack"].append(end_idx)
                 
                 state.current_label = opt["target"]
-                if "target_line" in opt:
-                    state.line_index = opt["target_line"]
-                    logger.info(f"Choice '{command}' -> {state.current_label} @ {state.line_index}")
-                else:
-                    state.line_index = 0
-                    state.variables.pop("__choice_stack", None)
-                    logger.info(f"Choice '{command}' -> New label: {state.current_label}")
+                state.line_index = opt.get("target_line", 0)
                 
-                state.last_choice_index = None # Reset after successful selection
+                # Return choice confirmation immediately so client can show it in log
+                save_and_log_state(game_id, state)
+                logger.info(f"Choice '{command}' confirmed -> {state.current_label} @ {state.line_index}")
+                return build_response(game_id, state, "choice_confirmed", text=opt["text"], character=p_name)
             else:
                 logger.warning(f"Invalid choice index '{command}' for choice at index {target_idx}")
 
@@ -96,8 +93,14 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
         # --- A. NON-BLOCKING COMMANDS ---
         
         if stripped == "clear_dialog":
+            # Return 'clear' type but keep the log in the response so the user sees it vanish
+            old_log = list(state.dialogue_log)
             state.dialogue_log = []
-            state.line_index += 1; continue
+            state.line_index += 1
+            save_and_log_state(game_id, state)
+            res = build_response(game_id, state, "clear")
+            res.dialogue_log = old_log
+            return res
 
         if re.match(r'^background\s+([\w_]+)', stripped):
             state.variables["__current_bg"] = re.match(r'^background\s+([\w_]+)', stripped).group(1)
@@ -134,9 +137,17 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
             logger.info(f"Var set: {var_path} = {val}")
             state.line_index += 1; continue
 
-        if re.match(r'^add(?:_stat|_level)?\s+([\w_.]+)\s+(.*)$', stripped):
-            m = re.match(r'^add(?:_stat|_level)?\s+([\w_.]+)\s+(.*)$', stripped)
+        if re.match(r'^(?:add|add_stat|add_level)\s+([\w_.]+)\s+(.*)$', stripped):
+            m = re.match(r'^(?:add|add_stat|add_level)\s+([\w_.]+)\s+(.*)$', stripped)
+            cmd_type = stripped.split()[0]
             var_path, val_str = m.group(1), m.group(2).strip()
+            
+            # Special handling for add_level and add_stat to use standard prefixes
+            if cmd_type == "add_level" and not (var_path.startswith("level.") or var_path.startswith("data.level.")):
+                var_path = f"level.{var_path}"
+            elif cmd_type == "add_stat" and not (var_path.startswith("stats.") or var_path.startswith("data.stats.")):
+                var_path = f"stats.{var_path}"
+
             try: val = int(val_str)
             except: val = evaluate_expression(val_str, state.variables) or 0
             
@@ -150,6 +161,8 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
             old_val = curr.get(path_parts[-1], 0)
             if isinstance(old_val, (int, float)) and isinstance(val, (int, float)):
                 curr[path_parts[-1]] = old_val + val
+            else:
+                curr[path_parts[-1]] = val # Fallback for non-numeric or new variable
 
             if "__updated_vars" not in state.variables: state.variables["__updated_vars"] = []
             if var_path not in state.variables["__updated_vars"]: state.variables["__updated_vars"].append(var_path)
@@ -197,7 +210,7 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
             await asyncio.sleep(ms / 1000.0)
             state.line_index += 1; continue
 
-        if re.match(r'^(?:play|stop|run|save|load|complete_objective|set_button|add_stat|add_level)\b', stripped):
+        if re.match(r'^(?:play|stop|run|save|load|complete_objective|set_button)\b', stripped):
             state.line_index += 1; continue
 
         # --- B. BLOCKING COMMANDS ---
