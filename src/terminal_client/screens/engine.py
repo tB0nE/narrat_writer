@@ -236,15 +236,19 @@ class GameEngine:
         return layout
 
     def run(self):
+        step_delay = float(os.getenv("NARRAT_STEP_DELAY", "0.2"))
         if not self.data:
             res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
             self.data = res.json()
+            if step_delay > 0: time.sleep(step_delay)
+        
         if os.getenv("NARRAT_TEST_MODE") == "1":
             while True:
                 self.console.print(self.display_game())
                 if self.data["type"] == "end": return
                 res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
                 self.data = res.json()
+                if step_delay > 0: time.sleep(step_delay)
             return
         
         input_obj = create_input()
@@ -338,6 +342,8 @@ class GameEngine:
                         else:
                             res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": str(cmd)})
                             self.data = res.json()
+                            if step_delay > 0: time.sleep(step_delay)
+                            
                             if cmd == "R": self.action_idx = 0
                             if self.data.get("type") in ["choice", "missing_label"]: 
                                 self.focus, self.choice_idx = "choices", 0
@@ -348,10 +354,14 @@ class GameEngine:
                                 if c == "Generate More":
                                     requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/continue")
                                     res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
-                                    self.data = res.json(); live.start()
+                                    self.data = res.json()
+                                    if step_delay > 0: time.sleep(step_delay)
+                                    live.start()
                                 elif c == "Restart":
                                     res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
-                                    self.data = res.json(); live.start()
+                                    self.data = res.json()
+                                    if step_delay > 0: time.sleep(step_delay)
+                                    live.start()
                                 else: return
 
     def handle_edit(self):
