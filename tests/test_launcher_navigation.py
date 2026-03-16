@@ -15,11 +15,11 @@ def mock_input_generator(sequence):
     for _ in range(50):
         yield []
 
-def test_launcher_navigates_to_create_game(launcher):
+def test_launcher_navigates_to_select_game(launcher):
     with patch('src.terminal_client.screens.launcher.requests.get') as mock_get, \
          patch('src.terminal_client.screens.launcher.create_input') as mock_input_factory, \
          patch('src.terminal_client.screens.launcher.Live') as mock_live, \
-         patch.object(launcher, 'create_game_flow') as mock_create_flow:
+         patch.object(launcher, 'select_game_flow_shared') as mock_select_flow:
         
         mock_get.return_value.json.return_value = {"api_url": "..."}
         mock_input = MagicMock()
@@ -30,13 +30,13 @@ def test_launcher_navigates_to_create_game(launcher):
         mock_input_factory.return_value = mock_input
         
         launcher.run()
-        mock_create_flow.assert_called_once()
+        mock_select_flow.assert_called_once()
 
-def test_launcher_navigates_to_select_game(launcher):
+def test_launcher_navigates_to_create_game(launcher):
     with patch('src.terminal_client.screens.launcher.requests.get') as mock_get, \
          patch('src.terminal_client.screens.launcher.create_input') as mock_input_factory, \
          patch('src.terminal_client.screens.launcher.Live') as mock_live, \
-         patch.object(launcher, 'select_game_flow_shared') as mock_select_flow:
+         patch.object(launcher, 'create_game_flow') as mock_create_flow:
         
         mock_get.return_value.json.return_value = {"api_url": "..."}
         mock_input = MagicMock()
@@ -48,7 +48,7 @@ def test_launcher_navigates_to_select_game(launcher):
         mock_input_factory.return_value = mock_input
         
         launcher.run()
-        mock_select_flow.assert_called_once()
+        mock_create_flow.assert_called_once()
 
 def test_launcher_navigates_to_options(launcher):
     with patch('src.terminal_client.screens.launcher.requests.get') as mock_get, \
