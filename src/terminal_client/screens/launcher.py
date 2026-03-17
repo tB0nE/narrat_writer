@@ -82,7 +82,7 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
 
     def run(self):
         """Primary Launcher loop handling top-level navigation with persistent Live context."""
-        options = ["Create Game", "Select Game", "Options", "Exit"]
+        options = ["Select Game", "Create Game", "Options", "Exit"]
         input_obj = create_input()
         idx = 0
         
@@ -107,10 +107,10 @@ Experience immersive storytelling, dynamic AI generation, and real-time script e
                     
                     if choice:
                         if choice == "Exit": sys.exit()
-                        elif choice == "Create Game":
-                            live.stop(); self.create_game_flow(); live.start()
                         elif choice == "Select Game":
                             self.select_game_flow_shared(live, input_obj)
+                        elif choice == "Create Game":
+                            live.stop(); self.create_game_flow(); live.start()
                         elif choice == "Options":
                             self.global_options_flow_shared(live, input_obj)
 

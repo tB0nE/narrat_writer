@@ -11,13 +11,37 @@ def get_game_path(game_id: str, *subpaths):
     games_dir = os.getenv("GARRAT_GAMES_DIR", "games")
     return os.path.join(games_dir, game_id, *subpaths)
 
-def load_metadata(game_id: str) -> Optional[GameMetadata]:
-    """Loads metadata for a specific game, syncing with folders and script assets."""
+def get_script_path(game_id: str, relative_path: str):
+    """Helper to get path to a script file within the scripts directory."""
+    return get_game_path(game_id, "scripts", relative_path)
+
+def load_metadata(game_id: str, sync: bool = False) -> Optional[GameMetadata]:
+    """Loads metadata for a specific game, optionally syncing with folders and script assets."""
+    # Migration Check: Move phase1.narrat to scripts/main.narrat
+    legacy_p = get_game_path(game_id, "phase1.narrat")
+    scripts_dir = get_game_path(game_id, "scripts")
+    if os.path.exists(legacy_p):
+        os.makedirs(scripts_dir, exist_ok=True)
+        # Create subfolders
+        for sub in ["chapters", "quests", "interactions"]:
+            os.makedirs(os.path.join(scripts_dir, sub), exist_ok=True)
+        # Move file
+        os.rename(legacy_p, os.path.join(scripts_dir, "main.narrat"))
+        logger.info(f"Migrated legacy script for game '{game_id}'")
+    elif not os.path.exists(scripts_dir):
+        # Ensure scripts dir exists for new games
+        os.makedirs(scripts_dir, exist_ok=True)
+        for sub in ["chapters", "quests", "interactions"]:
+            os.makedirs(os.path.join(scripts_dir, sub), exist_ok=True)
+
     path = get_game_path(game_id, "metadata.json")
     if os.path.exists(path):
         with open(path, "r") as f:
             meta = GameMetadata(**json.load(f))
         
+        if not sync:
+            return meta
+
         from src.server.parser import NarratParser
         parser = NarratParser(game_id)
         detected = parser.detect_assets()

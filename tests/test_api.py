@@ -30,7 +30,7 @@ def test_get_metadata(client, test_game):
 
 def test_step_game_start(client, test_game):
     # Explicitly write a test script to avoid AI fallback issues
-    script_path = os.path.join("test_games_tmp", test_game, "phase1.narrat")
+    script_path = os.path.join("test_games_tmp", test_game, "scripts", "main.narrat")
     with open(script_path, "w") as f:
         f.write('main:\n    talk narrator "Hello from Test"\n')
         

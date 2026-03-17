@@ -10,6 +10,7 @@ class GameMetadata(BaseModel):
     scenes: List[str] = []
     variables: List[str] = []
     starting_point: str = "main"
+    player_name: Optional[str] = None
     plot_outline: Optional[str] = None
     prompt_prefix: Optional[str] = None
 
@@ -21,6 +22,7 @@ class SessionState(BaseModel):
     history: List[Dict[str, Any]] = []
     dialogue_log: List[Dict[str, str]] = []
     last_type: str = "talk"
+    last_choice_index: Optional[int] = None
 
 class GameUpdate(BaseModel):
     command: str

@@ -3,6 +3,7 @@ import sys
 import time
 import subprocess
 import requests
+import re
 from rich.console import Console
 from rich.live import Live
 from rich.layout import Layout
@@ -11,6 +12,67 @@ from prompt_toolkit.keys import Keys
 
 console = Console()
 BASE_URL = "http://localhost:8045"
+
+def clean_text(text: str) -> str:
+    """Cleans Narrat script text: strips outer quotes once, then unescapes inner content."""
+    if not text: return text
+    text = text.strip()
+    
+    # 1. Strip ONE layer of outer quotes if they exist
+    if len(text) >= 2:
+        if (text[0] == '"' and text[-1] == '"') or (text[0] == "'" and text[-1] == "'"):
+            text = text[1:-1]
+            
+    # 2. Unescape common characters
+    text = text.replace('\\\\', '\\')
+    text = text.replace('\\"', '"').replace("\\'", "'").replace('\\n', '\n').replace('\\t', '\t')
+    
+    return text
+
+def process_spans(text: str) -> str:
+    """Converts HTML spans with specific classes to Rich markup and cleans text."""
+    if not text: return text
+    
+    # Clean text first (handle escapes/quotes)
+    text = clean_text(text)
+    
+    # Mapping of Narrat/Lovely Lady RPG classes to Rich styles
+    style_map = {
+        "nightmare": "bold red",
+        "nightmareQuote": "bold red italic",
+        "writtenText": "dim white",
+        "goldItalic": "bold yellow italic",
+        "golditalic": "bold yellow italic",
+        "gold": "bold yellow",
+        "magenta": "bold magenta",
+        "magentaTiny": "dim magenta",
+        "magentaSmall": "dim magenta",
+        "prompt": "bold cyan",
+        "boardgame": "bold green",
+        "small": "dim",
+        "threat": "bold red underline",
+        "nikita": "bold blue",
+        "nikitaQuote": "bold blue italic"
+    }
+
+    def replacer(match):
+        full_tag = match.group(1)
+        content = match.group(2)
+        
+        # Extract class using regex
+        class_match = re.search(r"class=['\"]([^'\"]+)['\"]", full_tag)
+        if class_match:
+            cls = class_match.group(1)
+            style = style_map.get(cls)
+            if style:
+                return f"[{style}]{content}[/{style}]"
+        
+        return content # If no class or no style found, just return the content
+
+    # Match <span class='...'>content</span>
+    # Using a non-greedy match for content
+    processed = re.sub(r"<(span\s+[^>]+)>(.*?)</span>", replacer, text, flags=re.DOTALL | re.IGNORECASE)
+    return processed
 
 def ensure_server_running():
     """Checks if server is up, starts it if not."""

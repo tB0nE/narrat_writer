@@ -3,6 +3,7 @@ import re
 import time
 import questionary
 import os
+from typing import Dict, List, Optional, Any
 from rich.panel import Panel
 from rich.layout import Layout
 from rich.live import Live
@@ -11,7 +12,7 @@ from rich.text import Text
 from rich.align import Align
 from prompt_toolkit.input import create_input
 from prompt_toolkit.keys import Keys
-from src.terminal_client.utils import console, BASE_URL, open_in_external_editor
+from src.terminal_client.utils import console, BASE_URL, open_in_external_editor, process_spans
 
 class GameEngine:
     def __init__(self, game_id, session_id, custom_console=None, base_url=None):
@@ -24,6 +25,8 @@ class GameEngine:
         self.choice_idx = 0
         self.console = custom_console or console
         self.base_url = base_url or BASE_URL
+        self.label_map = {}
+        self.refresh_label_map()
         
         # Determine actions based on editor availability
         self.actions = ["Next", "Back", "Reload Section", "Edit Assets", "View Script"]
@@ -34,6 +37,13 @@ class GameEngine:
                 self.actions.append("Edit Script")
         except: pass
         self.actions.append("Exit Game")
+
+    def refresh_label_map(self):
+        try:
+            res = requests.get(f"{self.base_url}/games/{self.game_id}/label_map")
+            if res.status_code == 200:
+                self.label_map = res.json().get("label_map", {})
+        except: pass
 
     def get_actions_row(self):
         parts = []
@@ -53,7 +63,7 @@ class GameEngine:
         if not options: return "[dim]No options available.[/dim]"
         # options is a dict { "1": {"text": "...", "target": "..."}, ... }
         for i, (key, opt) in enumerate(options.items()):
-            text = opt['text']
+            text = process_spans(opt['text'])
             if self.focus == "choices" and i == self.choice_idx: 
                 lines.append(f"> [bold black on yellow] {text} [/bold black on yellow]")
             else: 
@@ -73,28 +83,52 @@ class GameEngine:
         if meta.get("description"): text += f"\n[italic]{meta['description']}[/italic]"
         return Panel(Align.center(text, vertical="middle"), title="References", border_style="magenta")
 
+    def resolve_path(self, data, path):
+        """Helper to resolve nested paths like 'data.ghost.chosePath'"""
+        if path.startswith("data."):
+            path = path[5:]
+        parts = path.split(".")
+        curr = data
+        for p in parts:
+            if isinstance(curr, dict) and p in curr:
+                curr = curr[p]
+            else:
+                return "None"
+        return curr
+
     def get_state_panel(self):
         table = Table(show_header=False, box=None, padding=(0, 1))
         vars_dict = self.data.get("variables", {})
         updated_vars = vars_dict.get("__updated_vars", [])
         if not updated_vars: table.add_row("", "[dim]No variables updated yet.[/dim]")
         else:
-            for var in reversed(updated_vars): table.add_row(f"  {var}:", str(vars_dict.get(var)))
+            for var in reversed(updated_vars): 
+                val = self.resolve_path(vars_dict, var)
+                table.add_row(f"  {var}:", str(val))
         return Panel(table, title="Current State", border_style="green")
 
     def get_script_panel(self):
-        try:
-            with open(f"games/{self.game_id}/phase1.narrat", "r") as f: lines = f.readlines()
-        except: return Panel("Script file not found.", title="Script Viewer", border_style="red")
+        curr_label = self.data.get("current_label", "")
+        logical_index = self.data.get("line_index", 0)
+        rel_path = self.label_map.get(curr_label)
         
-        curr_label, logical_index = self.data.get("current_label", ""), self.data.get("line_index", 0)
+        if not rel_path:
+            return Panel(f"Script location for label '{curr_label}' not found.", title="Script Viewer", border_style="red")
+        
+        try:
+            # We must use the absolute path relative to the engine's perspective
+            full_path = os.path.join("games", self.game_id, "scripts", rel_path)
+            with open(full_path, "r") as f: lines = f.readlines()
+        except: 
+            return Panel(f"Script file not found: {rel_path}", title="Script Viewer", border_style="red")
+        
         label_file_idx = -1
         
         # 1. Find the label in the file
         for i, line in enumerate(lines):
             # Strict label match: 'label:' or 'label name:' at start of line
-            if re.match(rf"^{curr_label}:\s*(?://.*)?$", line.rstrip()) or \
-               re.match(rf"^label\s+{curr_label}:\s*(?://.*)?$", line.rstrip()):
+            if re.match(rf"^{curr_label}:\s*(?://.*)?$", line.strip()) or \
+               re.match(rf"^label\s+{curr_label}:\s*(?://.*)?$", line.strip()):
                 label_file_idx = i
                 break
         
@@ -127,7 +161,7 @@ class GameEngine:
         table.add_column("num", justify="right", style="dim cyan", width=4); table.add_column("content")
         
         for i in range(start, end):
-            content = lines[i].rstrip()
+            content = process_spans(lines[i].rstrip())
             if i == target_file_idx:
                 table.add_row(f"[bold cyan]{i+1}[/bold cyan]", Text(f"> {content}", style="bold white on grey15"))
             else:
@@ -148,12 +182,37 @@ class GameEngine:
         log = self.data.get("dialogue_log") or []
         styles = ["[bold yellow]{char}[/bold yellow]: [bold white]{text}[/bold white]", "[dim yellow]{char}[/dim yellow]: [grey42]{text}[/grey42]", "[grey30]{char}: {text}[/grey30]", "[grey15]{char}: {text}[/grey15]", "[grey11]{char}: {text}[/grey11]", "[grey3]{char}: {text}[/grey3]"]
         lines = []
-        for i in range(min(len(log), 6)):
-            entry = log[-(i+1)]
-            lines.insert(0, styles[i].format(char=entry['character'], text=entry['text']))
+        
+        # If there's active text (like a choice prompt), show it first (as the most recent)
+        raw_text = self.data.get("text")
+        active_text = process_spans(raw_text)
+        
+        display_log = list(log)
+        # Avoid duplicating the last log entry if it's identical to active text
+        if active_text and display_log and process_spans(display_log[-1]['text']) == active_text:
+            display_log.pop()
+
+        start_idx = 0
+        if active_text:
+            char = self.data.get("character") or "narrator"
+            # If the text already has a colon in the first 20 chars (e.g. "Orb: Debatable"),
+            # it's already attributed, so we don't add the prefix again.
+            if ": " in active_text[:20]:
+                lines.append(active_text)
+            else:
+                lines.append(styles[0].format(char=char.capitalize(), text=active_text))
+            start_idx = 1
+
+        for i in range(start_idx, min(len(display_log) + start_idx, 6)):
+            entry = display_log[-(i+1-start_idx)]
+            processed_text = process_spans(entry['text'])
+            lines.insert(0, styles[i].format(char=entry['character'].capitalize(), text=processed_text))
+        
+        # Original padding logic
         box_h = int((self.console.height - 3) * 0.35) - 2
         pad = "\n" * max(0, box_h - sum(len(l.split("\n")) + 1 for l in lines) - 1)
         main["diag"].update(Panel(pad + "\n\n".join(lines), title="Dialogue", border_style="cyan"))
+        
         footer_content = ""
         if self.data.get("type") == "missing_label": 
             target = self.data.get("meta", {}).get("target", "unknown")
@@ -172,28 +231,58 @@ class GameEngine:
         elif self.data.get("type") == "end": 
             footer_content = f"\n[bold red]End of Script.[/bold red]"
         
-        # Determine border style based on focus
         low_border = "yellow"
         if self.focus == "choices": low_border = "bold green"
-        
         main["low"].split_column(Layout(Panel(footer_content, title="Input / Choice", border_style=low_border), ratio=70), Layout(Align.center(self.get_actions_row()), ratio=30))
         return layout
 
+    def set_data(self, data: Dict[str, Any]):
+        self.data = data
+        if self.data.get("type") in ["choice", "missing_label"]:
+            self.focus = "choices"
+            self.choice_idx = 0
+        else:
+            self.focus = "actions"
+
     def run(self):
-        res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
-        self.data = res.json()
+        talk_delay = float(os.getenv("NARRAT_TALK_DELAY", "0.2"))
+        choice_delay = float(os.getenv("NARRAT_CHOICE_DELAY", "0.7"))
+        
+        if not self.data:
+            res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
+            self.set_data(res.json())
+            
+            # Initial auto-step check
+            while self.data.get("type") in ["choice_confirmed", "clear"]:
+                self.console.print(self.display_game())
+                if choice_delay > 0: time.sleep(choice_delay)
+                res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
+                self.set_data(res.json())
+        
         if os.getenv("NARRAT_TEST_MODE") == "1":
             while True:
                 self.console.print(self.display_game())
                 if self.data["type"] == "end": return
                 res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
-                self.data = res.json()
+                self.set_data(res.json())
+                if self.data.get("type") in ["choice_confirmed", "clear"]:
+                    if choice_delay > 0: time.sleep(choice_delay)
+                else:
+                    if talk_delay > 0: time.sleep(talk_delay)
             return
         
         input_obj = create_input()
         with Live(self.display_game(), auto_refresh=False, screen=True) as live:
             with input_obj.raw_mode():
                 while True:
+                    # Auto-step logic for transitional states
+                    if self.data.get("type") in ["choice_confirmed", "clear"]:
+                        live.update(self.display_game()); live.refresh()
+                        if choice_delay > 0: time.sleep(choice_delay)
+                        res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
+                        self.set_data(res.json())
+                        continue
+
                     live.update(self.display_game()); live.refresh()
                     keys = input_obj.read_keys()
                     if not keys:
@@ -221,8 +310,9 @@ class GameEngine:
                         elif key.key == Keys.Enter or key.key == Keys.ControlM:
                             if self.focus == "choices":
                                 if self.data.get("type") == "choice":
-                                    opt_keys = list(self.data["options"].keys())
-                                    cmd = opt_keys[self.choice_idx]
+                                    opt_keys = list(self.data.get("options", {}).keys())
+                                    if opt_keys and self.choice_idx < len(opt_keys):
+                                        cmd = opt_keys[self.choice_idx]
                                 elif self.data.get("type") == "missing_label":
                                     # 0: Generate, 1: Back
                                     cmd = "AI_GENERATE" if self.choice_idx == 0 else "B"
@@ -243,12 +333,19 @@ class GameEngine:
                             live.stop()
                             if cmd == "EDIT_SCRIPT":
                                 # Find current line index in file for external editor
-                                p = f"games/{self.game_id}/phase1.narrat"
-                                with open(p, "r") as f: lines = f.readlines()
-                                file_idx = -1
                                 curr_label, l_idx = self.data.get("current_label"), self.data.get("line_index", 0)
+                                rel_path = self.label_map.get(curr_label)
+                                
+                                if not rel_path:
+                                    console.print(f"[red]Could not find script file for label '{curr_label}'[/red]")
+                                    time.sleep(2); live.start(); continue
+
+                                full_p = os.path.join("games", self.game_id, "scripts", rel_path)
+                                
+                                with open(full_p, "r") as f: lines = f.readlines()
+                                file_idx = -1
                                 for i, line in enumerate(lines):
-                                    if re.match(rf"^{curr_label}:", line.strip()):
+                                    if re.match(rf"^(?:label\s+)?{curr_label}:", line.strip()):
                                         file_idx = i; break
                                 if file_idx != -1:
                                     count = 0
@@ -257,25 +354,31 @@ class GameEngine:
                                         if re.match(r"^[\w_]+:", lines[i].strip()): break
                                         if count == l_idx: file_idx = i; break
                                         count += 1
-                                open_in_external_editor(p, file_idx + 1)
+                                open_in_external_editor(full_p, file_idx + 1)
                             else:
                                 self.handle_edit()
                             live.start()
                             res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "B_REPROCESS"})
-                            self.data = res.json()
+                            self.set_data(res.json())
                         elif cmd == "AI_GENERATE":
                             live.stop()
                             with console.status("AI is generating missing content..."):
                                 requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/generate", json={"target": self.data["meta"]["target"]})
                             # Use B_REPROCESS to reload the script and stay on the current label (which now exists)
                             res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "B_REPROCESS"})
-                            self.data = res.json(); live.start()
+                            self.set_data(res.json()); live.start()
                         else:
                             res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": str(cmd)})
-                            self.data = res.json()
+                            self.set_data(res.json())
+                            
+                            # Only sleep for 'Next' command if we hit a content state.
+                            # Choice selections (numeric cmd) are handled by the auto-step logic above to avoid double-sleeping.
+                            # Utility commands like Reload (R) or Back (B) should be instant.
+                            if cmd == " " and talk_delay > 0:
+                                if self.data.get("type") in ["talk", "choice", "end"]:
+                                    time.sleep(talk_delay)
+                            
                             if cmd == "R": self.action_idx = 0
-                            if self.data.get("type") in ["choice", "missing_label"]: 
-                                self.focus, self.choice_idx = "choices", 0
                             
                             if self.data.get("type") == "end":
                                 live.stop()
@@ -283,17 +386,27 @@ class GameEngine:
                                 if c == "Generate More":
                                     requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/continue")
                                     res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": " "})
-                                    self.data = res.json(); live.start()
+                                    self.set_data(res.json())
+                                    if talk_delay > 0: time.sleep(talk_delay)
+                                    live.start()
                                 elif c == "Restart":
                                     res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/step", json={"command": "R"})
-                                    self.data = res.json(); live.start()
+                                    self.set_data(res.json())
+                                    if talk_delay > 0: time.sleep(talk_delay)
+                                    live.start()
                                 else: return
 
     def handle_edit(self):
-        p = f"games/{self.game_id}/phase1.narrat"
-        with open(p, "r") as f: lines = f.readlines()
-        idx = -1
         curr_label, l_idx = self.data.get("current_label"), self.data.get("line_index", 0)
+        rel_path = self.label_map.get(curr_label)
+        if not rel_path:
+            self.console.print(f"[red]Could not find script file for label '{curr_label}'[/red]")
+            time.sleep(2); return
+
+        full_p = os.path.join("games", self.game_id, "scripts", rel_path)
+        
+        with open(full_p, "r") as f: lines = f.readlines()
+        idx = -1
         for i, line in enumerate(lines):
             if re.match(rf"^(?:label\s+)?{curr_label}:\s*(?://.*)?$", line.strip()):
                 idx = i; break
@@ -312,17 +425,28 @@ class GameEngine:
             action = questionary.select("Action", choices=["Edit Manually", "Edit in External Editor", "Rewrite with AI", "Back"]).ask()
             if action == "Edit Manually":
                 nt = questionary.text("New Text").ask()
-                if nt: requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "script", "action": "update", "target": str(idx), "content": f"talk {self.data.get('character', 'narrator')} \"{nt}\""})
+                if nt: requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit", json={
+                    "category": "script", "action": "update", "target": str(idx), 
+                    "content": f"talk {self.data.get('character', 'narrator')} \"{nt}\"",
+                    "meta": {"path": rel_path}
+                })
             elif action == "Edit in External Editor":
                 from src.terminal_client.utils import edit_text_in_external_editor
                 initial_text = self.data.get('text', '')
                 nt = edit_text_in_external_editor(initial_text)
-                if nt: requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit", json={"category": "script", "action": "update", "target": str(idx), "content": f"talk {self.data.get('character', 'narrator')} \"{nt}\""})
+                if nt: requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit", json={
+                    "category": "script", "action": "update", "target": str(idx), 
+                    "content": f"talk {self.data.get('character', 'narrator')} \"{nt}\"",
+                    "meta": {"path": rel_path}
+                })
             elif action == "Rewrite with AI":
                 instr = questionary.text("Instruction?").ask()
                 if instr:
                     with console.status("AI is rewriting..."):
-                        res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit/ai", json={"target": str(idx), "content": instr})
+                        res = requests.post(f"{self.base_url}/games/{self.game_id}/sessions/{self.session_id}/edit/ai", json={
+                            "target": str(idx), "content": instr,
+                            "meta": {"path": rel_path}
+                        })
                     if res.status_code == 200: questionary.press_any_key_to_continue().ask()
         
         elif et == "Background":

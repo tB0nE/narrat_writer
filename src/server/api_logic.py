@@ -1,9 +1,10 @@
 import re
 import json
 import logging
+import asyncio
 from typing import TYPE_CHECKING, Dict, List, Optional, Any
 from src.server.models import DialogueResponse, SessionState
-from src.server.utils import get_reference, save_session
+from src.server.utils import get_reference, save_session, load_metadata
 from src.server.expressions import evaluate_expression
 
 if TYPE_CHECKING:
@@ -11,27 +12,59 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("narrat_api")
 
+def unescape_narrat_text(text: str) -> str:
+    """Cleans Narrat script text: strips outer quotes once, then unescapes inner content."""
+    if not text: return text
+    text = text.strip()
+    
+    # 1. Strip ONE layer of outer quotes if they exist
+    if len(text) >= 2:
+        if (text[0] == '"' and text[-1] == '"') or (text[0] == "'" and text[-1] == "'"):
+            text = text[1:-1]
+            
+    # 2. Unescape common characters
+    text = text.replace('\\\\', '\\')
+    text = text.replace('\\"', '"').replace("\\'", "'").replace('\\n', '\n').replace('\\t', '\t')
+    
+    return text
+
 async def process_current_step(game_id: str, state: SessionState, parser: 'NarratParser', command: str = None):
     """
     Standard VN 'Run-until-blocked' loop.
     Processes script lines until a talk or choice is reached.
     """
-    logger.info(f"Step: {state.current_label} @ {state.line_index} (Cmd: '{command}')")
+    logger.info(f"--- Step Start: {state.current_label} @ {state.line_index} (Cmd: '{command}') ---")
     
     # 1. Handle Choice selection if command is numeric
     if command and command.strip().isdigit():
-        # Choice selection always happens when we are already AT a choice block.
-        # However, we incremented the index by 1 when we returned the choice response.
-        # So the actual 'choice:' line is at state.line_index - 1
-        line_data = parser.get_line(state.current_label, state.line_index - 1)
-        if line_data and line_data[1].strip() == "choice:":
-            options = parse_choice_options(parser, state.current_label, state.line_index)
+        target_idx = state.last_choice_index if state.last_choice_index is not None else state.line_index - 1
+        line_data = parser.get_line(state.current_label, target_idx)
+        
+        if line_data and re.match(r'^\s*choice:\s*(?://.*)?$', line_data[1]):
+            options, _, _, end_idx = parse_choice_options(parser, state, state.current_label, target_idx + 1)
             if command.strip() in options:
-                state.current_label, state.line_index = options[command.strip()]["target"], 0
-                logger.info(f"Choice selected: {command} -> {state.current_label}")
-                # After a choice jump, we fall through to the main execution loop
+                opt = options[command.strip()]
+                
+                # Record the selection in the dialogue log
+                meta = load_metadata(game_id)
+                p_name = meta.player_name if meta and meta.player_name else "player"
+                state.dialogue_log.append({"character": p_name.capitalize(), "text": opt["text"]})
+                if len(state.dialogue_log) > 20: state.dialogue_log.pop(0)
+                
+                # Push to choice stack for nested logic
+                if "__choice_stack" not in state.variables:
+                    state.variables["__choice_stack"] = []
+                state.variables["__choice_stack"].append(end_idx)
+                
+                state.current_label = opt["target"]
+                state.line_index = opt.get("target_line", 0)
+                
+                # Return choice confirmation immediately so client can show it in log
+                save_and_log_state(game_id, state)
+                logger.info(f"Choice '{command}' confirmed -> {state.current_label} @ {state.line_index}")
+                return build_response(game_id, state, "choice_confirmed", text=opt["text"], character=p_name)
             else:
-                logger.warning(f"Invalid choice index: {command}")
+                logger.warning(f"Invalid choice index '{command}' for choice at index {target_idx}")
 
     # 2. Main Execution Loop
     loop_safety = 0
@@ -40,18 +73,35 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
         line_data = parser.get_line(state.current_label, state.line_index)
         
         if line_data is None:
+            if "__choice_stack" in state.variables and state.variables["__choice_stack"]:
+                state.line_index = state.variables["__choice_stack"].pop()
+                logger.info(f"End of label, returning to choice stack @ {state.line_index}")
+                continue
             if state.current_label not in parser.labels:
                 return DialogueResponse(type="missing_label", meta={"target": state.current_label}, text=f"Label '{state.current_label}' missing.", variables=state.variables, dialogue_log=state.dialogue_log)
             return DialogueResponse(type="end", text="End of script.", variables=state.variables, dialogue_log=state.dialogue_log)
 
         line_num, line_text = line_data
         stripped = line_text.strip()
+        indent = len(line_text) - len(line_text.lstrip())
 
         if not stripped or stripped.startswith("//"):
             state.line_index += 1; continue
 
-        # --- A. NON-BLOCKING COMMANDS (Update state and continue) ---
+        logger.debug(f"Processing: [{state.current_label}:{state.line_index}] {stripped}")
+
+        # --- A. NON-BLOCKING COMMANDS ---
         
+        if stripped == "clear_dialog":
+            # Return 'clear' type but keep the log in the response so the user sees it vanish
+            old_log = list(state.dialogue_log)
+            state.dialogue_log = []
+            state.line_index += 1
+            save_and_log_state(game_id, state)
+            res = build_response(game_id, state, "clear")
+            res.dialogue_log = old_log
+            return res
+
         if re.match(r'^background\s+([\w_]+)', stripped):
             state.variables["__current_bg"] = re.match(r'^background\s+([\w_]+)', stripped).group(1)
             state.line_index += 1; continue
@@ -62,20 +112,17 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
 
         if re.match(r'^set_expression\s+([\w_]+)\s+([\w_]+)', stripped):
             m = re.match(r'^set_expression\s+([\w_]+)\s+([\w_]+)', stripped)
-            char, emo = m.group(1), m.group(2)
-            state.variables[f"__emo_{char}"] = emo
+            state.variables[f"__emo_{m.group(1)}"] = m.group(2)
             state.line_index += 1; continue
 
-        if re.match(r'^set\s+([\w_.]+)\s+(.*)$', stripped):
-            m = re.match(r'^set\s+([\w_.]+)\s+(.*)$', stripped)
+        if re.match(r'^(?:set|var|set_stat)\s+([\w_.]+)\s+(.*)$', stripped):
+            m = re.match(r'^(?:set|var|set_stat)\s+([\w_.]+)\s+(.*)$', stripped)
             var_path, val_str = m.group(1), m.group(2).strip()
-            # Basic parsing
             if val_str.isdigit(): val = int(val_str)
             elif val_str.lower() == "true": val = True
             elif val_str.lower() == "false": val = False
-            else: val = val_str.strip('"').strip("'")
+            else: val = unescape_narrat_text(val_str)
             
-            # Nested update
             clean_path = var_path[5:] if var_path.startswith("data.") else var_path
             path_parts = clean_path.split(".")
             curr = state.variables
@@ -83,25 +130,60 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
                 if p not in curr or not isinstance(curr[p], dict): curr[p] = {}
                 curr = curr[p]
             curr[path_parts[-1]] = val
-            
-            # Tracking
+
             if "__updated_vars" not in state.variables: state.variables["__updated_vars"] = []
             if var_path not in state.variables["__updated_vars"]: state.variables["__updated_vars"].append(var_path)
             if len(state.variables["__updated_vars"]) > 10: state.variables["__updated_vars"].pop(0)
+            logger.info(f"Var set: {var_path} = {val}")
+            state.line_index += 1; continue
+
+        if re.match(r'^(?:add|add_stat|add_level)\s+([\w_.]+)\s+(.*)$', stripped):
+            m = re.match(r'^(?:add|add_stat|add_level)\s+([\w_.]+)\s+(.*)$', stripped)
+            cmd_type = stripped.split()[0]
+            var_path, val_str = m.group(1), m.group(2).strip()
+            
+            # Special handling for add_level and add_stat to use standard prefixes
+            if cmd_type == "add_level" and not (var_path.startswith("level.") or var_path.startswith("data.level.")):
+                var_path = f"level.{var_path}"
+            elif cmd_type == "add_stat" and not (var_path.startswith("stats.") or var_path.startswith("data.stats.")):
+                var_path = f"stats.{var_path}"
+
+            try: val = int(val_str)
+            except: val = evaluate_expression(val_str, state.variables) or 0
+            
+            clean_path = var_path[5:] if var_path.startswith("data.") else var_path
+            path_parts = clean_path.split(".")
+            curr = state.variables
+            for p in path_parts[:-1]:
+                if p not in curr or not isinstance(curr[p], dict): curr[p] = {}
+                curr = curr[p]
+            
+            old_val = curr.get(path_parts[-1], 0)
+            if isinstance(old_val, (int, float)) and isinstance(val, (int, float)):
+                curr[path_parts[-1]] = old_val + val
+            else:
+                curr[path_parts[-1]] = val # Fallback for non-numeric or new variable
+
+            if "__updated_vars" not in state.variables: state.variables["__updated_vars"] = []
+            if var_path not in state.variables["__updated_vars"]: state.variables["__updated_vars"].append(var_path)
+            logger.info(f"Var add: {var_path} + {val} = {curr[path_parts[-1]]}")
             state.line_index += 1; continue
 
         if re.match(r'^(?:jump|->)\s+([\w_]+)', stripped):
             target = re.match(r'^(?:jump|->)\s+([\w_]+)', stripped).group(1)
+            logger.info(f"Jump: {target}")
             state.current_label, state.line_index = target, 0
+            state.variables.pop("__choice_stack", None)
             continue
 
         if re.match(r'^if\s+(.*):$', stripped):
             expr = re.match(r'^if\s+(.*):$', stripped).group(1).strip()
             if evaluate_expression(expr, state.variables):
+                logger.info(f"If TRUE: {expr}")
                 state.line_index += 1
             else:
-                # Skip block
-                base_indent = len(line_text) - len(line_text.lstrip())
+                logger.info(f"If FALSE: {expr}, skipping block")
+                base_indent = indent
                 state.line_index += 1
                 while True:
                     nxt = parser.get_line(state.current_label, state.line_index)
@@ -111,75 +193,136 @@ async def process_current_step(game_id: str, state: SessionState, parser: 'Narra
                     state.line_index += 1
             continue
 
-        # --- B. BLOCKING COMMANDS (Update state and return) ---
+        if stripped == "else:":
+            logger.info("Skipping else block (if was true)")
+            base_indent = indent
+            state.line_index += 1
+            while True:
+                nxt = parser.get_line(state.current_label, state.line_index)
+                if not nxt: break
+                if not nxt[1].strip(): state.line_index += 1; continue
+                if (len(nxt[1]) - len(nxt[1].lstrip())) <= base_indent: break
+                state.line_index += 1
+            continue
 
-        if stripped == "choice:":
-            options = parse_choice_options(parser, state.current_label, state.line_index + 1)
-            # Increment index so we sit ON the choice block for selection
+        if re.match(r'^wait\s+(\d+)', stripped):
+            ms = int(re.match(r'^wait\s+(\d+)', stripped).group(1))
+            await asyncio.sleep(ms / 1000.0)
+            state.line_index += 1; continue
+
+        if re.match(r'^(?:play|stop|run|save|load|complete_objective|set_button)\b', stripped):
+            state.line_index += 1; continue
+
+        # --- B. BLOCKING COMMANDS ---
+
+        if re.match(r'^\s*choice:\s*(?://.*)?$', stripped):
+            state.last_choice_index = state.line_index
+            options, prompt_text, prompt_char, end_idx = parse_choice_options(parser, state, state.current_label, state.line_index + 1)
+            
+            if prompt_text:
+                # Add prompt to log
+                state.dialogue_log.append({"character": prompt_char or "narrator", "text": prompt_text})
+                if len(state.dialogue_log) > 20: state.dialogue_log.pop(0)
+
             res_idx = state.line_index
             state.line_index += 1
             save_and_log_state(game_id, state)
-            return build_response(game_id, state, "choice", options=options, line_index=res_idx)
+            return build_response(game_id, state, "choice", options=options, text=prompt_text or None, character=prompt_char, line_index=res_idx)
 
-        # Dialogue match
         char, text = match_dialogue(stripped)
         if char:
             res_idx = state.line_index
-            # We ALWAYS increment the index for the next step, 
-            # regardless of whether we are reprocessing or not.
             state.line_index += 1
-            
             state.dialogue_log.append({"character": char, "text": text})
             if len(state.dialogue_log) > 20: state.dialogue_log.pop(0)
             save_and_log_state(game_id, state)
             return build_response(game_id, state, "talk", character=char, text=text, line_index=res_idx)
 
-        # Unrecognized - skip
-        logger.warning(f"Unknown line: {stripped}")
+        if "__choice_stack" in state.variables and state.variables["__choice_stack"]:
+             if re.match(r'^\s*"(.*)"\s*(?:if\s+.*)?:\s*(?://.*)?$', line_text):
+                 state.line_index = state.variables["__choice_stack"].pop()
+                 logger.info(f"Choice option finished, returning to choice stack @ {state.line_index}")
+                 continue
+
+        logger.warning(f"Unknown line at {state.current_label} @ {state.line_index}: '{stripped}'")
         state.line_index += 1
 
     return DialogueResponse(type="end", text="Safety limit.")
 
-# --- HELPERS ---
-
-def parse_choice_options(parser, label, start_idx):
+def parse_choice_options(parser, state, label, start_idx):
     options, opt_idx, temp_idx = {}, 1, start_idx
+    prompt_lines = []
+    
+    # 1. Collect leading text
     while True:
         nxt = parser.get_line(label, temp_idx)
         if not nxt: break
-        txt = nxt[1].strip()
+        raw = nxt[1]
+        txt = raw.strip()
+        if not txt or txt.startswith("//"): 
+            temp_idx += 1; continue
+        if re.match(r'^\s*"(.*)"\s*(?:if\s+.*)?:\s*(?://.*)?$', raw): break
+        char, text = match_dialogue(txt)
+        if char: prompt_lines.append((char, text))
+        temp_idx += 1
+
+    # Format prompt text and determine character attribution
+    if len(prompt_lines) == 1:
+        res_char, res_text = prompt_lines[0]
+    elif len(prompt_lines) > 1:
+        res_char = "narrator"
+        res_text = "\n".join([f"{c}: {t}" if c != "narrator" else t for c, t in prompt_lines])
+    else:
+        res_char = None
+        res_text = None
+
+    # 2. Collect options
+    while True:
+        nxt = parser.get_line(label, temp_idx)
+        if not nxt: break
+        raw = nxt[1]; txt = raw.strip()
         if not txt or txt.startswith("//"): temp_idx += 1; continue
-        opt_m = re.match(r'^\s*"(.*)":\s*(?://.*)?$', nxt[1])
-        if opt_m:
-            label_text = opt_m.group(1)
-            s_idx, target_lbl = temp_idx + 1, None
-            while True:
-                j_data = parser.get_line(label, s_idx)
-                if not j_data: break
-                jc = j_data[1].strip()
-                if not jc or jc.startswith("//"): s_idx += 1; continue
-                if re.match(r'^\s*"(.*)":', j_data[1]): break # Next option
-                m = re.search(r'(?:jump|->)\s+([\w_]+)', jc)
-                if m: target_lbl = m.group(1); break
-                s_idx += 1
-            if target_lbl:
-                options[str(opt_idx)] = {"text": label_text, "target": target_lbl}
-                opt_idx += 1; temp_idx = s_idx + 1; continue
-        break
-    return options
+        opt_match = re.match(r'^\s*"(.*)"\s*(?:if\s+(.*))?:\s*(?://.*)?$', raw)
+        if not opt_match: break
+            
+        label_text = unescape_narrat_text(opt_match.group(1)); condition = opt_match.group(2)
+        base_indent = len(raw) - len(raw.lstrip())
+        
+        if condition:
+            condition = condition.strip().rstrip(":")
+            if not evaluate_expression(condition, state.variables):
+                temp_idx += 1
+                while True:
+                    n_data = parser.get_line(label, temp_idx)
+                    if not n_data: break
+                    if n_data[1].strip() and (len(n_data[1]) - len(n_data[1].lstrip())) <= base_indent: break
+                    temp_idx += 1
+                continue
+
+        options[str(opt_idx)] = {"text": label_text, "target": label, "target_line": temp_idx + 1}
+        logger.info(f"Option {opt_idx} registered at line {temp_idx + 1}")
+        
+        opt_idx += 1; temp_idx += 1
+        while True:
+            n_data = parser.get_line(label, temp_idx)
+            if not n_data or (n_data[1].strip() and (len(n_data[1]) - len(n_data[1].lstrip())) <= base_indent): break
+            temp_idx += 1
+                
+    return options, res_text, res_char, temp_idx
 
 def match_dialogue(stripped):
-    # talk char "text"
     m = re.match(r'^(?:talk\s+)?([\w_]+)(?:\s+[\w_]+)?\s+"(.*)"$', stripped)
-    if m and m.group(1) not in ["background", "scene", "jump", "set", "set_expression", "choice", "if", "var"]:
-        return m.group(1), m.group(2)
-    # "text" (implicit narrate)
+    if m and m.group(1) not in ["background", "scene", "jump", "set", "set_expression", "choice", "if", "else", "var", "wait", "add", "clear_dialog", "play", "stop", "run", "roll", "complete_objective", "set_button", "save", "load"]:
+        return m.group(1), unescape_narrat_text(m.group(2))
     m = re.match(r'^"(.*)"$', stripped)
-    if m: return "narrator", m.group(1)
+    if m: return "narrator", unescape_narrat_text(m.group(1))
     return None, None
 
+
+
 def save_and_log_state(game_id, state):
-    state.history.append(json.loads(state.model_dump_json()))
+    snapshot = state.model_dump(exclude={"history"})
+    state.history.append(snapshot)
     if len(state.history) > 50: state.history.pop(0)
     save_session(game_id, state)
 
@@ -192,16 +335,12 @@ def build_response(game_id, state, rtype, **kwargs):
         "placeholder": get_reference(game_id, "characters", char, "idle"),
         "emotion": state.variables.get(f"__emo_{char}", "Neutral")
     }
+    res_label = kwargs.get("current_label", state.current_label) or "main"
     return DialogueResponse(
-        type=rtype,
-        character=char,
-        background=bg,
+        type=rtype, character=char, background=bg,
         background_desc=get_reference(game_id, "backgrounds", bg) if bg != "None" else "",
         meta={**char_meta, **kwargs.get("meta", {})},
-        current_label=state.current_label,
-        line_index=kwargs.get("line_index", state.line_index),
-        variables=state.variables,
-        dialogue_log=state.dialogue_log,
-        options=kwargs.get("options"),
-        text=kwargs.get("text")
+        current_label=res_label, line_index=kwargs.get("line_index", state.line_index),
+        variables=state.variables, dialogue_log=state.dialogue_log,
+        options=kwargs.get("options"), text=kwargs.get("text")
     )

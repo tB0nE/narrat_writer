@@ -14,7 +14,7 @@ from src.server.models import (
     CreateGameRequest, GenerateRequest, DialogueResponse
 )
 from src.server.utils import (
-    get_game_path, load_metadata, save_metadata, 
+    get_game_path, get_script_path, load_metadata, save_metadata, 
     load_session, save_session, get_reference
 )
 from src.server.parser import NarratParser, evaluate_expression
@@ -110,15 +110,36 @@ async def update_api_config(new_config: Dict[str, Any]):
 
 @app.get("/games")
 async def list_games():
-    """Lists all games currently available with detailed metadata."""
+    """Lists all games currently available, sorted by last played/updated."""
     games_dir = os.getenv("GARRAT_GAMES_DIR", "games")
     if not os.path.exists(games_dir): return {"games": []}
+    
     games = []
     for d in os.listdir(games_dir):
-        if os.path.isdir(os.path.join(games_dir, d)):
-            meta = load_metadata(d)
+        game_path = os.path.join(games_dir, d)
+        if os.path.isdir(game_path):
+            # Determine last updated time (newest save or metadata)
+            last_time = 0
+            meta_path = os.path.join(game_path, "metadata.json")
+            if os.path.exists(meta_path):
+                last_time = os.path.getmtime(meta_path)
+            
+            saves_dir = os.path.join(game_path, "saves")
+            if os.path.exists(saves_dir):
+                for f in os.listdir(saves_dir):
+                    if f.endswith(".json"):
+                        last_time = max(last_time, os.path.getmtime(os.path.join(saves_dir, f)))
+            
+            meta = load_metadata(d, sync=True)
             if meta: 
-                games.append({"id": d, "title": meta.title, "summary": meta.summary, "genre": meta.genre, "characters": meta.characters, "plot_outline": meta.plot_outline})
+                games.append({
+                    "id": d, "title": meta.title, "summary": meta.summary, 
+                    "genre": meta.genre, "characters": meta.characters, 
+                    "plot_outline": meta.plot_outline, "last_updated": last_time
+                })
+    
+    # Sort by last_updated descending
+    games.sort(key=lambda x: x["last_updated"], reverse=True)
     return {"games": games}
 
 @app.get("/games/{game_id}/validate")
@@ -134,9 +155,16 @@ async def get_game_labels(game_id: str):
         return {"labels": list(parser.labels.keys())}
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/games/{game_id}/label_map")
+async def get_game_label_map(game_id: str):
+    try:
+        parser = NarratParser(game_id)
+        return {"label_map": parser.label_to_file}
+    except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/games/{game_id}/metadata")
 async def get_game_metadata(game_id: str):
-    meta = load_metadata(game_id)
+    meta = load_metadata(game_id, sync=True)
     if meta: return meta
     raise HTTPException(status_code=404, detail="Game not found")
 
@@ -167,6 +195,13 @@ async def create_game(req: CreateGameRequest):
             os.makedirs(os.path.join(game_dir, "reference", "characters", char), exist_ok=True)
     
     os.makedirs(os.path.join(game_dir, "saves"), exist_ok=True)
+    
+    # Scaffold scripts directory
+    scripts_dir = os.path.join(game_dir, "scripts")
+    os.makedirs(scripts_dir, exist_ok=True)
+    for sub in ["chapters", "quests", "interactions"]:
+        os.makedirs(os.path.join(scripts_dir, sub), exist_ok=True)
+
     save_metadata(req.name, meta)
     
     if req.prompt:
@@ -178,7 +213,7 @@ async def create_game(req: CreateGameRequest):
         except: initial_script = f"{meta.starting_point}:\n    talk narrator \"Welcome to {meta.title}.\"\n"
     else: initial_script = f"{meta.starting_point}:\n    talk narrator \"Welcome to {meta.title}!\"\n"
 
-    with open(os.path.join(game_dir, "phase1.narrat"), "w") as f: f.write(initial_script)
+    with open(os.path.join(scripts_dir, "main.narrat"), "w") as f: f.write(initial_script)
     return {"status": "success", "game_id": req.name}
 
 def get_full_character_context(game_id: str, meta: GameMetadata) -> str:
@@ -195,8 +230,11 @@ def get_full_character_context(game_id: str, meta: GameMetadata) -> str:
 @app.post("/games/{game_id}/sessions/{session_id}/generate")
 async def generate_more_story(game_id: str, session_id: str, req: Dict[str, Any]):
     target = req.get("target")
+    parser = NarratParser(game_id)
+    # Resolve which file to append to. Default to main.narrat if target is new or unknown
+    rel_path = req.get("path") or parser.label_to_file.get(target) or "main.narrat"
     state = load_session(game_id, session_id)
-    meta = load_metadata(game_id)
+    meta = load_metadata(game_id, sync=True)
     
     char_context = get_full_character_context(game_id, meta) if meta else ""
     context = ""
@@ -214,15 +252,17 @@ async def generate_more_story(game_id: str, session_id: str, req: Dict[str, Any]
         new_script = call_llm(prompt, game_id=game_id)
         new_script = re.sub(r'^```[\w]*\s*\n?', '', new_script, flags=re.MULTILINE)
         new_script = re.sub(r'\n?```$', '', new_script, flags=re.MULTILINE)
-        p = get_game_path(game_id, "phase1.narrat")
+        p = get_script_path(game_id, rel_path)
         with open(p, "a") as f: f.write("\n\n" + new_script + "\n")
         return {"status": "success"}
     except Exception as e: raise HTTPException(status_code=502, detail=str(e))
 
 @app.post("/games/{game_id}/sessions/{session_id}/continue")
-async def continue_story(game_id: str, session_id: str):
+async def continue_story(game_id: str, session_id: str, req: Dict[str, Any] = None):
     state = load_session(game_id, session_id)
-    meta = load_metadata(game_id)
+    parser = NarratParser(game_id)
+    rel_path = (req or {}).get("path") or parser.label_to_file.get(state.current_label) or "main.narrat"
+    meta = load_metadata(game_id, sync=True)
     
     char_context = get_full_character_context(game_id, meta) if meta else ""
     next_label = f"cont_{state.current_label}_{int(time.time())}"
@@ -242,7 +282,7 @@ async def continue_story(game_id: str, session_id: str):
         new_script = call_llm(prompt, game_id=game_id)
         new_script = re.sub(r'^```[\w]*\s*\n?', '', new_script, flags=re.MULTILINE)
         new_script = re.sub(r'\n?```$', '', new_script, flags=re.MULTILINE)
-        p = get_game_path(game_id, "phase1.narrat")
+        p = get_script_path(game_id, rel_path)
         with open(p, "a") as f: f.write("\n\n" + new_script + "\n")
         
         # Point the state to the new label
@@ -254,9 +294,14 @@ async def continue_story(game_id: str, session_id: str):
 
 @app.post("/games/{game_id}/sessions/{session_id}/step")
 async def step_game(game_id: str, session_id: str, update: GameUpdate):
+    logger.info(f"API Step: {game_id}/{session_id} cmd='{update.command}'")
     state = load_session(game_id, session_id)
+    # Ensure it's saved immediately if it's new
+    save_session(game_id, state)
+    
     parser = NarratParser(game_id)
     if update.command == "R":
+        parser.refresh()
         state.line_index = 0
         return await process_current_step(game_id, state, parser, "B_REPROCESS")
     if update.command == "B":
@@ -268,7 +313,34 @@ async def step_game(game_id: str, session_id: str, update: GameUpdate):
             state = SessionState(**prev_state_dict)
             save_session(game_id, state)
             return await process_current_step(game_id, state, parser, "B_REPROCESS")
+    
+    logger.info(f"Dispatching to logic: {state.current_label} @ {state.line_index}")
     return await process_current_step(game_id, state, parser, update.command)
+
+@app.get("/games/{game_id}/scripts/content")
+async def get_script_content(game_id: str, path: str):
+    p = get_script_path(game_id, path)
+    if not os.path.exists(p): raise HTTPException(status_code=404, detail="Script not found")
+    with open(p, "r") as f: return {"content": f.read()}
+
+@app.put("/games/{game_id}/scripts/content")
+async def update_script_content(game_id: str, req: Dict[str, str]):
+    path, content = req.get("path"), req.get("content")
+    if not path: raise HTTPException(status_code=400, detail="Missing path")
+    p = get_script_path(game_id, path)
+    if not os.path.exists(p): raise HTTPException(status_code=404, detail="Script not found")
+    with open(p, "w") as f: f.write(content)
+    NarratParser(game_id).refresh()
+    return {"status": "success"}
+
+@app.delete("/games/{game_id}/scripts/content")
+async def delete_script(game_id: str, path: str):
+    if path == "main.narrat": raise HTTPException(status_code=400, detail="Cannot delete main.narrat")
+    p = get_script_path(game_id, path)
+    if not os.path.exists(p): raise HTTPException(status_code=404, detail="Script not found")
+    os.remove(p)
+    NarratParser(game_id).refresh()
+    return {"status": "success"}
 
 @app.get("/games/{game_id}/assets/{category}")
 async def list_assets(game_id: str, category: str):
@@ -282,6 +354,8 @@ async def list_assets(game_id: str, category: str):
 async def get_asset(game_id: str, category: str, asset_id: str, type: str = "description"):
     if category == "backgrounds": p = get_game_path(game_id, "reference", "backgrounds", f"{asset_id}.txt")
     elif category == "characters": p = get_game_path(game_id, "reference", "characters", asset_id, f"{asset_id}_{type}.txt")
+    elif category == "scenes": p = get_game_path(game_id, "reference", "scenes", f"{asset_id}.txt")
+    elif category == "variables": p = get_game_path(game_id, "reference", "variables", f"{asset_id}.txt")
     else: p = get_game_path(game_id, "reference", category, f"{asset_id}.txt")
     if not os.path.exists(p): return {"content": ""}
     with open(p, "r") as f: return {"content": f.read()}
@@ -289,7 +363,7 @@ async def get_asset(game_id: str, category: str, asset_id: str, type: str = "des
 @app.post("/games/{game_id}/assets/generate")
 async def generate_asset(game_id: str, req: GenerateRequest):
     target, cat, sub = req.target, req.category, req.sub_type
-    meta = load_metadata(game_id)
+    meta = load_metadata(game_id, sync=True)
     prompt = prompts.ASSET_DESCRIPTION_PROMPT.format(asset_id=target, asset_type=f"{cat} {sub}", metadata=meta.model_dump_json(indent=2) if meta else "No metadata")
     try:
         content = call_llm(prompt, game_id=game_id)
@@ -306,7 +380,7 @@ async def scan_assets(game_id: str):
     Scans the script for characters, backgrounds, and variables.
     Creates missing reference files/folders and updates metadata.
     """
-    meta = load_metadata(game_id)
+    meta = load_metadata(game_id, sync=True)
     if not meta: raise HTTPException(status_code=404, detail="Not found")
     
     from src.server.parser import NarratParser
@@ -354,7 +428,7 @@ async def scan_assets(game_id: str):
 
 @app.delete("/games/{game_id}/assets/{category}/{asset_id}")
 async def delete_asset(game_id: str, category: str, asset_id: str):
-    meta = load_metadata(game_id)
+    meta = load_metadata(game_id, sync=True)
     if not meta: raise HTTPException(status_code=404, detail="Not found")
     
     from src.server.parser import NarratParser
@@ -401,7 +475,7 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
     if cat == "characters":
         new_id = new_id.lower().replace(" ", "_")
         
-    meta = load_metadata(game_id)
+    meta = load_metadata(game_id, sync=True)
     if not meta: raise HTTPException(status_code=404, detail="Not found")
 
     def apply_smart_rename(text, old, new):
@@ -452,12 +526,51 @@ async def rename_asset(game_id: str, req: Dict[str, str]):
                     new_f = f.lower().replace(old_id.lower(), new_id.lower())
                     os.rename(os.path.join(new_p, f), os.path.join(new_p, new_f))
 
-    # 3. Update Script
-    sp = get_game_path(game_id, "phase1.narrat")
-    if os.path.exists(sp):
-        with open(sp, "r") as f: content = f.read()
-        with open(sp, "w") as f: f.write(apply_smart_rename(content, old_id, new_id))
+    # 3. Update Scripts
+    scripts_dir = get_game_path(game_id, "scripts")
+    if os.path.exists(scripts_dir):
+        for root, _, files in os.walk(scripts_dir):
+            for f in files:
+                if f.endswith(".narrat"):
+                    sp = os.path.join(root, f)
+                    with open(sp, "r") as file: content = file.read()
+                    with open(sp, "w") as file: file.write(apply_smart_rename(content, old_id, new_id))
 
+    return {"status": "success"}
+
+@app.get("/games/{game_id}/scripts")
+async def list_scripts(game_id: str):
+    scripts_dir = get_game_path(game_id, "scripts")
+    if not os.path.exists(scripts_dir): return {"scripts": []}
+    
+    scripts = []
+    for root, _, files in os.walk(scripts_dir):
+        for f in files:
+            if f.endswith(".narrat"):
+                full_p = os.path.join(root, f)
+                rel_p = os.path.relpath(full_p, scripts_dir)
+                scripts.append({
+                    "path": rel_p,
+                    "name": f.replace(".narrat", ""),
+                    "size": os.path.getsize(full_p)
+                })
+    return {"scripts": sorted(scripts, key=lambda x: x["path"])}
+
+@app.post("/games/{game_id}/scripts")
+async def create_script(game_id: str, req: Dict[str, str]):
+    path = req.get("path") # e.g. "chapters/chapter1.narrat"
+    if not path: raise HTTPException(status_code=400, detail="Missing path")
+    if not path.endswith(".narrat"): path += ".narrat"
+    
+    full_p = get_game_path(game_id, "scripts", path)
+    os.makedirs(os.path.dirname(full_p), exist_ok=True)
+    
+    if os.path.exists(full_p): raise HTTPException(status_code=400, detail="File already exists")
+    
+    # Scaffold with a basic label if it's empty
+    label_name = os.path.basename(path).replace(".narrat", "")
+    content = f"// New script: {path}\n\n{label_name}:\n    \"This is a new script.\"\n"
+    with open(full_p, "w") as f: f.write(content)
     return {"status": "success"}
 
 @app.post("/games/{game_id}/sessions/{session_id}/edit")
@@ -480,17 +593,23 @@ async def edit_game(game_id: str, session_id: str, update: Dict[str, Any]):
         
         with open(p, "w") as f: f.write(content)
     elif cat == "script":
-        p = get_game_path(game_id, "phase1.narrat")
+        rel_path = update.get("meta", {}).get("path")
+        if not rel_path:
+            parser = NarratParser(game_id)
+            state = load_session(game_id, session_id)
+            rel_path = parser.label_to_file.get(state.current_label) or "main.narrat"
+
+        p = get_script_path(game_id, rel_path)
         with open(p, "r") as f: lines = f.readlines()
         lines[int(target)] = f"{re.match(r'^\s*', lines[int(target)]).group(0)}{content}\n"
         with open(p, "w") as f: f.writelines(lines)
     elif cat == "metadata":
-        meta = load_metadata(game_id)
+        meta = load_metadata(game_id, sync=True)
         if meta: setattr(meta, target, content); save_metadata(game_id, meta)
     
     # Sync metadata characters if we just edited/created a character reference
     if cat == "reference" and update.get("sub_category") == "character":
-        meta = load_metadata(game_id)
+        meta = load_metadata(game_id, sync=True)
         if meta and target not in meta.characters:
             meta.characters.append(target)
             save_metadata(game_id, meta)
@@ -501,12 +620,17 @@ async def edit_game(game_id: str, session_id: str, update: Dict[str, Any]):
 async def edit_game_ai(game_id: str, session_id: str, update: Dict[str, Any]):
     target_idx = int(update.get("target"))
     instruction = update.get("content")
+    rel_path = update.get("meta", {}).get("path")
+    if not rel_path:
+        parser = NarratParser(game_id)
+        state = load_session(game_id, session_id)
+        rel_path = parser.label_to_file.get(state.current_label) or "main.narrat"
     
-    p = get_game_path(game_id, "phase1.narrat")
+    p = get_script_path(game_id, rel_path)
     with open(p, "r") as f: lines = f.readlines()
     
     old_line = lines[target_idx].strip()
-    meta = load_metadata(game_id)
+    meta = load_metadata(game_id, sync=True)
     
     prompt = f"Original line: {old_line}\nInstruction: {instruction}\nContext: {meta.model_dump_json() if meta else ''}\nRewrite the line using valid narrat syntax. Return ONLY the line."
     new_content = call_llm(prompt, game_id=game_id).strip()
@@ -521,7 +645,7 @@ async def edit_game_ai(game_id: str, session_id: str, update: Dict[str, Any]):
 @app.post("/games/{game_id}/refine/options")
 async def refine_metadata_options(game_id: str, req: Dict[str, str]):
     field, instruction = req.get("field"), req.get("instruction", "Better")
-    current_meta = load_metadata(game_id)
+    current_meta = load_metadata(game_id, sync=True)
     prompt = prompts.METADATA_REFINE_PROMPT.format(field=field, instruction=instruction, metadata=current_meta.model_dump_json(indent=2))
     try:
         raw = call_llm(prompt, game_id=game_id)
@@ -532,7 +656,7 @@ async def refine_metadata_options(game_id: str, req: Dict[str, str]):
 
 @app.post("/games/{game_id}/regenerate")
 async def regenerate_metadata(game_id: str, req: CreateGameRequest):
-    current_meta = load_metadata(game_id)
+    current_meta = load_metadata(game_id, sync=True)
     prompt = prompts.REGENERATE_METADATA_PROMPT.format(user_prompt=req.prompt or "Refine", current_metadata=current_meta.model_dump_json(indent=2))
     try:
         raw = call_llm(prompt, game_id=game_id)
@@ -569,7 +693,9 @@ async def list_saves(game_id: str):
                     "last_text": st.dialogue_log[-1]["text"] if st.dialogue_log else "Start", 
                     "timestamp": mtime
                 })
-            except: continue
+            except Exception as e:
+                logger.error(f"Error loading save {sid}: {e}")
+                continue
     saves.sort(key=lambda x: x["timestamp"], reverse=True)
     return {"saves": saves}
 
