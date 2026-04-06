@@ -95,13 +95,11 @@ async def update_api_config(new_config: Dict[str, Any]):
     env_lines = []
     if os.path.exists(env_path):
         with open(env_path, "r") as f: env_lines = f.readlines()
+    from src.server.utils import update_env_lines
     def update_env_line(key, value):
-        found = False
-        for i, line in enumerate(env_lines):
-            if line.startswith(f"{key}="):
-                env_lines[i] = f"{key}={value}\n"; found = True; break
-        if not found: env_lines.append(f"{key}={value}\n")
-        os.environ[key] = str(value)
+        nonlocal env_lines
+        env_lines, sanitized_value = update_env_lines(env_lines, key, value)
+        os.environ[key] = sanitized_value
     mappable = {"global_prompt_prefix": "GLOBAL_PROMPT_PREFIX", "editor": "EDITOR", "api_url": "API_URL", "api_key": "API_KEY", "model": "API_MODEL", "narrat_mode": "NARRAT_MODE"}
     for k, env_k in mappable.items():
         if k in new_config: update_env_line(env_k, new_config[k])
