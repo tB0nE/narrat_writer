@@ -6,7 +6,6 @@ import re
 from datetime import datetime
 from rich.panel import Panel
 from rich.align import Align
-from rich.table import Table
 from rich.layout import Layout
 from rich.live import Live
 from prompt_toolkit.input import create_input
